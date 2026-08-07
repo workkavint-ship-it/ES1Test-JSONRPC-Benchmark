@@ -36,6 +36,27 @@ namespace Plugin {
         ES1Benchmark() = default;
         ~ES1Benchmark() override = default;
 
+        // Plugin configuration — read from ES1Benchmark.json on device
+        class Config : public Core::JSON::Container {
+        public:
+            Config()
+                : Core::JSON::Container()
+                , NotifyHost("127.0.0.1")  // IP of the Python coldstart server
+                , NotifyPort(8080)          // Port of the Python coldstart server
+                , ThunderHost("127.0.0.1") // IP of this device (sent to Python so it can connect back)
+                , ThunderPort(55555)        // Thunder JSON-RPC port on this device
+            {
+                Add(_T("notifyhost"),  &NotifyHost);
+                Add(_T("notifyport"),  &NotifyPort);
+                Add(_T("thunderhost"), &ThunderHost);
+                Add(_T("thunderport"), &ThunderPort);
+            }
+            Core::JSON::String  NotifyHost;
+            Core::JSON::DecUInt16 NotifyPort;
+            Core::JSON::String  ThunderHost;
+            Core::JSON::DecUInt16 ThunderPort;
+        };
+
         BEGIN_INTERFACE_MAP(ES1Benchmark)
             INTERFACE_ENTRY(PluginHost::IPlugin)
             INTERFACE_ENTRY(PluginHost::IDispatcher)

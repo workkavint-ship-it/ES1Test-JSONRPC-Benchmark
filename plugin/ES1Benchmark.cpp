@@ -42,7 +42,7 @@ namespace Plugin {
             {}
         );
 
-        // Helper function to get Unix epoch time in microseconds
+        // Returns Unix epoch time in microseconds — same epoch as Python time.time()
         inline uint64_t GetUnixMicroseconds() {
             return std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::system_clock::now().time_since_epoch()
@@ -50,28 +50,46 @@ namespace Plugin {
         }
     }
 
-    const string ES1Benchmark::Initialize(PluginHost::IShell* /* service */)
+    const string ES1Benchmark::Initialize(PluginHost::IShell* service)
     {
         Exchange::JES1Benchmark::Register(*this, this);
 
-        // Fire-and-forget HTTP trigger to cold-startup benchmark server (port 8080)
-        std::thread([] {
+        // Read configuration from plugin JSON (e.g. /etc/WPEFramework/plugins/ES1Benchmark.json)
+        Config config;
+        config.FromString(service->ConfigLine());
+
+        const string notifyHost  = config.NotifyHost.Value();
+        const uint16_t notifyPort  = config.NotifyPort.Value();
+        const string thunderHost = config.ThunderHost.Value();
+        const uint16_t thunderPort = config.ThunderPort.Value();
+
+        // Fire-and-forget HTTP GET to the Python coldstart monitor.
+        // The monitor receives this, then connects back to thunderHost:thunderPort
+        // to run the full benchmark suite.
+        // Times out silently after 2 seconds if no monitor is running.
+        std::thread([notifyHost, notifyPort, thunderHost, thunderPort] {
             uint64_t boot_us = GetUnixMicroseconds();
-            char req[256];
+            char req[512];
             ::snprintf(req, sizeof(req),
-                "GET /trigger?host=127.0.0.1&port=55555&boot_time_us=%llu HTTP/1.0\r\n"
-                "Host: 127.0.0.1\r\n\r\n",
-                static_cast<unsigned long long>(boot_us));
+                "GET /trigger?host=%s&port=%u&boot_time_us=%llu HTTP/1.0\r\n"
+                "Host: %s\r\n\r\n",
+                thunderHost.c_str(),
+                static_cast<unsigned>(thunderPort),
+                static_cast<unsigned long long>(boot_us),
+                notifyHost.c_str());
 
             int sock = ::socket(AF_INET, SOCK_STREAM, 0);
             if (sock < 0) return;
+
             struct timeval tv { 2, 0 };
             ::setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
             ::setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
             struct sockaddr_in addr {};
             addr.sin_family      = AF_INET;
-            addr.sin_port        = ::htons(8080);
-            addr.sin_addr.s_addr = ::inet_addr("127.0.0.1");
+            addr.sin_port        = ::htons(notifyPort);
+            addr.sin_addr.s_addr = ::inet_addr(notifyHost.c_str());
+
             if (::connect(sock, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) == 0) {
                 ::send(sock, req, ::strlen(req), 0);
             }
@@ -93,14 +111,9 @@ namespace Plugin {
 
     uint32_t ES1Benchmark::EchoString(const string& value, string& echo, uint64_t& ts2, uint64_t& ts3)
     {
-        // TS2: Unix epoch timestamp at API entry (after deserialization)
         ts2 = GetUnixMicroseconds();
-        
         echo = value;
-        
-        // TS3: Unix epoch timestamp before return (before serialization)
         ts3 = GetUnixMicroseconds();
-        
         return Core::ERROR_NONE;
     }
 
