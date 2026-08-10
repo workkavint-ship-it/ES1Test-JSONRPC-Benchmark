@@ -4,8 +4,8 @@ autostart = "@PLUGIN_ES1BENCHMARK_AUTOSTART@"
 # Set notifyhost to the IP of the machine running es1_benchmark_coldstart.py.
 # Set thunderhost to the IP of this ES1 device (so the Python server knows where to connect back).
 configuration = {
-    "notifyhost":  "127.0.0.1",
+    "notifyhost":  "10.0.0.154",
     "notifyport":  8080,
-    "thunderhost": "127.0.0.1",
-    "thunderport": 55555
+    "thunderhost": "10.0.0.8",
+    "thunderport": 9998
 }
