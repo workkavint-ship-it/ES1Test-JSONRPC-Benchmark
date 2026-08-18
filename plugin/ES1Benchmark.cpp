@@ -109,75 +109,53 @@ namespace Plugin {
         return string("ES1 JSON-RPC round-trip benchmark echo plugin");
     }
 
-    uint32_t ES1Benchmark::EchoString(const string& value, string& echo, uint64_t& ts2, uint64_t& ts3)
+    // Note: 'echo' is intentionally left unassigned below. Copying the
+    // payload into the out-parameter costs CPU time inside the handler,
+    // which would pollute the JSON-RPC round-trip measurement. Only the
+    // dispatch/(de)serialization cost of the framework is being measured.
+
+    uint32_t ES1Benchmark::EchoString(const string& /* value */, string& /* echo */)
     {
-        ts2 = GetUnixMicroseconds();
-        echo = value;
-        ts3 = GetUnixMicroseconds();
         return Core::ERROR_NONE;
     }
 
-    uint32_t ES1Benchmark::EchoArray(const std::vector<uint8_t>& values, std::vector<uint8_t>& echo, uint64_t& ts2, uint64_t& ts3)
+    uint32_t ES1Benchmark::EchoArray(const std::vector<uint8_t>& /* values */, std::vector<uint8_t>& /* echo */)
     {
-        ts2 = GetUnixMicroseconds();
-        echo = values;
-        ts3 = GetUnixMicroseconds();
         return Core::ERROR_NONE;
     }
 
-    uint32_t ES1Benchmark::EchoMixedArray(const std::vector<Exchange::IES1Benchmark::MixedElement>& elements, std::vector<Exchange::IES1Benchmark::MixedElement>& echo, uint64_t& ts2, uint64_t& ts3)
+    uint32_t ES1Benchmark::EchoMixedArray(const std::vector<Exchange::IES1Benchmark::MixedElement>& /* elements */, std::vector<Exchange::IES1Benchmark::MixedElement>& /* echo */)
     {
-        ts2 = GetUnixMicroseconds();
-        echo = elements;
-        ts3 = GetUnixMicroseconds();
         return Core::ERROR_NONE;
     }
 
-    uint32_t ES1Benchmark::EchoNestedObjects(const std::vector<Exchange::IES1Benchmark::NestedObject>& objects, std::vector<Exchange::IES1Benchmark::NestedObject>& echo, uint64_t& ts2, uint64_t& ts3)
+    uint32_t ES1Benchmark::EchoNestedObjects(const std::vector<Exchange::IES1Benchmark::NestedObject>& /* objects */, std::vector<Exchange::IES1Benchmark::NestedObject>& /* echo */)
     {
-        ts2 = GetUnixMicroseconds();
-        echo = objects;
-        ts3 = GetUnixMicroseconds();
         return Core::ERROR_NONE;
     }
 
-    uint32_t ES1Benchmark::EchoUint32(const uint32_t value, uint32_t& echo, uint64_t& ts2, uint64_t& ts3)
+    uint32_t ES1Benchmark::EchoUint32(const uint32_t /* value */, uint32_t& /* echo */)
     {
-        ts2 = GetUnixMicroseconds();
-        echo = value;
-        ts3 = GetUnixMicroseconds();
         return Core::ERROR_NONE;
     }
 
-    uint32_t ES1Benchmark::EchoUint64(const uint64_t value, uint64_t& echo, uint64_t& ts2, uint64_t& ts3)
+    uint32_t ES1Benchmark::EchoUint64(const uint64_t /* value */, uint64_t& /* echo */)
     {
-        ts2 = GetUnixMicroseconds();
-        echo = value;
-        ts3 = GetUnixMicroseconds();
         return Core::ERROR_NONE;
     }
 
-    uint32_t ES1Benchmark::EchoBool(const bool value, bool& echo, uint64_t& ts2, uint64_t& ts3)
+    uint32_t ES1Benchmark::EchoBool(const bool /* value */, bool& /* echo */)
     {
-        ts2 = GetUnixMicroseconds();
-        echo = value;
-        ts3 = GetUnixMicroseconds();
         return Core::ERROR_NONE;
     }
 
-    uint32_t ES1Benchmark::EchoFloat(const float value, float& echo, uint64_t& ts2, uint64_t& ts3)
+    uint32_t ES1Benchmark::EchoFloat(const float /* value */, float& /* echo */)
     {
-        ts2 = GetUnixMicroseconds();
-        echo = value;
-        ts3 = GetUnixMicroseconds();
         return Core::ERROR_NONE;
     }
 
-    uint32_t ES1Benchmark::EchoDouble(const double value, double& echo, uint64_t& ts2, uint64_t& ts3)
+    uint32_t ES1Benchmark::EchoDouble(const double /* value */, double& /* echo */)
     {
-        ts2 = GetUnixMicroseconds();
-        echo = value;
-        ts3 = GetUnixMicroseconds();
         return Core::ERROR_NONE;
     }
 
