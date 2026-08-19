@@ -69,15 +69,37 @@ namespace Plugin {
         string Information() const override;
 
         // IES1Benchmark
-        uint32_t EchoString(string& value) override;
-        uint32_t EchoArray(std::vector<uint8_t>& values) override;
-        uint32_t EchoMixedArray(std::vector<Exchange::IES1Benchmark::MixedElement>& elements) override;
-        uint32_t EchoNestedObjects(std::vector<Exchange::IES1Benchmark::NestedObject>& objects) override;
-        uint32_t EchoUint32(uint32_t& value) override;
-        uint32_t EchoUint64(uint64_t& value) override;
-        uint32_t EchoBool(bool& value) override;
-        uint32_t EchoFloat(float& value) override;
-        uint32_t EchoDouble(double& value) override;
+        uint32_t SetString(const string& value) override;
+        uint32_t GetString(const uint32_t size, string& value) override;
+
+        uint32_t SetArray(const std::vector<uint8_t>& value) override;
+        uint32_t GetArray(const uint32_t size, uint8_t values[]) override;
+
+        uint32_t SetMixedArray(const std::vector<Exchange::IES1Benchmark::MixedElement>& value) override;
+        uint32_t GetMixedArray(const uint32_t count, std::vector<Exchange::IES1Benchmark::MixedElement>& value) override;
+
+        uint32_t SetNestedObjects(const std::vector<Exchange::IES1Benchmark::NestedObject>& value) override;
+        uint32_t GetNestedObjects(const uint32_t count, std::vector<Exchange::IES1Benchmark::NestedObject>& value) override;
+
+        uint32_t SetUint32(const uint32_t value) override;
+        uint32_t GetUint32(uint32_t& value) override;
+
+        uint32_t SetUint64(const uint64_t value) override;
+        uint32_t GetUint64(uint64_t& value) override;
+
+        uint32_t SetBool(const bool value) override;
+        uint32_t GetBool(bool& value) override;
+
+        uint32_t SetFloat(const float value) override;
+        uint32_t GetFloat(float& value) override;
+
+        uint32_t SetDouble(const double value) override;
+        uint32_t GetDouble(double& value) override;
+
+        uint32_t MeasureCopyCost(const uint32_t size, uint64_t& us) override;
+        uint32_t MeasureStringResizeCost(const uint32_t size, uint64_t& us) override;
+        uint32_t MeasureMixedAssignCost(const uint32_t count, uint64_t& us) override;
+        uint32_t MeasureNestedAssignCost(const uint32_t count, uint64_t& us) override;
     };
 
 } // namespace Plugin

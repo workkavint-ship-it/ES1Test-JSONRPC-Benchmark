@@ -48,6 +48,54 @@ namespace Plugin {
                 std::chrono::system_clock::now().time_since_epoch()
             ).count();
         }
+
+        // Static benchmark payload data. Built once, read-only for the rest of the
+        // plugin's lifetime, so concurrent Get* calls from multiple clients can read
+        // it without locking. Content is arbitrary - only size/shape matters here.
+        static char    s_staticCharBuffer[4 * 1024 * 1024];  // GetString source, up to @restrict:0..4M
+        static uint8_t s_staticByteBuffer[256 * 1024];       // GetArray source, up to @restrict:0..256K
+
+        static uint32_t s_staticUint32 = 0xFFFFFFFFu;
+        static uint64_t s_staticUint64 = 0xFFFFFFFFFFFFFFFFull;
+        static bool     s_staticBool   = true;
+        static float    s_staticFloat  = 3.4028235e+38f;
+        static double   s_staticDouble = 1.7976931348623157e+308;
+
+        // Namespace-scope statics, built once via IIFE at static-init time (before any
+        // handler can ever run) - referenced directly by name in the Get* handlers, no
+        // function call and no lazy-init guard check on every access.
+        static const std::vector<Exchange::IES1Benchmark::MixedElement> s_staticMixedVec = [] {
+            std::vector<Exchange::IES1Benchmark::MixedElement> v;
+            v.reserve(4228);
+            for (uint32_t i = 0; i < 4228; ++i) {
+                v.push_back({ i, "item" + std::to_string(i), i * 3.14159, (i % 2 == 0) });
+            }
+            return v;
+        }();
+
+        static const std::vector<Exchange::IES1Benchmark::NestedObject> s_staticNestedVec = [] {
+            std::vector<Exchange::IES1Benchmark::NestedObject> v;
+            v.reserve(1736);
+            for (uint32_t i = 0; i < 1736; ++i) {
+                Exchange::IES1Benchmark::NestedObject obj;
+                obj.id = i;
+                obj.flag = (i % 2 == 0);
+                obj.score = i * 3.14159;
+                obj.data.label = "item" + std::to_string(i);
+                obj.data.nested.count = i;
+                obj.data.nested.inner.value = i * 3;
+                obj.data.nested.inner.name = "deep" + std::to_string(i);
+                v.push_back(obj);
+            }
+            return v;
+        }();
+
+        // One-time fill for the flat static buffers (content is arbitrary).
+        const bool s_staticBuffersFilled = [] {
+            std::memset(s_staticCharBuffer, 'A', sizeof(s_staticCharBuffer));
+            std::memset(s_staticByteBuffer, 0xAA, sizeof(s_staticByteBuffer));
+            return true;
+        }();
     }
 
     const string ES1Benchmark::Initialize(PluginHost::IShell* service)
@@ -109,54 +157,170 @@ namespace Plugin {
         return string("ES1 JSON-RPC round-trip benchmark echo plugin");
     }
 
-    // Note: 'value' is an @inout parameter - the framework deserializes the
-    // request straight into it and serializes the same variable back out as
-    // the response, so it already holds the correct echoed value on entry.
-    // No copy/assignment is needed (or wanted - that would cost CPU time
-    // inside the handler and pollute the JSON-RPC round-trip measurement).
+    // Set* handlers: no work needed - the framework's own deserialize step is what's
+    // being measured. Nothing is stored, so concurrent Set* calls from different
+    // clients never interfere with each other.
 
-    uint32_t ES1Benchmark::EchoString(string& /* value */)
+    uint32_t ES1Benchmark::SetString(const string& /* value */)
     {
         return Core::ERROR_NONE;
     }
 
-    uint32_t ES1Benchmark::EchoArray(std::vector<uint8_t>& /* values */)
+    uint32_t ES1Benchmark::SetArray(const std::vector<uint8_t>& /* value */)
     {
         return Core::ERROR_NONE;
     }
 
-    uint32_t ES1Benchmark::EchoMixedArray(std::vector<Exchange::IES1Benchmark::MixedElement>& /* elements */)
+    uint32_t ES1Benchmark::SetMixedArray(const std::vector<Exchange::IES1Benchmark::MixedElement>& /* value */)
     {
         return Core::ERROR_NONE;
     }
 
-    uint32_t ES1Benchmark::EchoNestedObjects(std::vector<Exchange::IES1Benchmark::NestedObject>& /* objects */)
+    uint32_t ES1Benchmark::SetNestedObjects(const std::vector<Exchange::IES1Benchmark::NestedObject>& /* value */)
     {
         return Core::ERROR_NONE;
     }
 
-    uint32_t ES1Benchmark::EchoUint32(uint32_t& /* value */)
+    uint32_t ES1Benchmark::SetUint32(const uint32_t /* value */)
     {
         return Core::ERROR_NONE;
     }
 
-    uint32_t ES1Benchmark::EchoUint64(uint64_t& /* value */)
+    uint32_t ES1Benchmark::SetUint64(const uint64_t /* value */)
     {
         return Core::ERROR_NONE;
     }
 
-    uint32_t ES1Benchmark::EchoBool(bool& /* value */)
+    uint32_t ES1Benchmark::SetBool(const bool /* value */)
     {
         return Core::ERROR_NONE;
     }
 
-    uint32_t ES1Benchmark::EchoFloat(float& /* value */)
+    uint32_t ES1Benchmark::SetFloat(const float /* value */)
     {
         return Core::ERROR_NONE;
     }
 
-    uint32_t ES1Benchmark::EchoDouble(double& /* value */)
+    uint32_t ES1Benchmark::SetDouble(const double /* value */)
     {
+        return Core::ERROR_NONE;
+    }
+
+    // Get* handlers: populate the output from pre-built static data. 'size'/'count'
+    // are bounded by @restrict on the interface, so the framework rejects
+    // out-of-range requests before these ever run.
+
+    uint32_t ES1Benchmark::GetString(const uint32_t size, string& value)
+    {
+        value.resize(size);
+        std::memcpy(&value[0], s_staticCharBuffer, size);
+        return Core::ERROR_NONE;
+    }
+
+    uint32_t ES1Benchmark::GetArray(const uint32_t size, uint8_t values[])
+    {
+        std::memcpy(values, s_staticByteBuffer, size);
+        return Core::ERROR_NONE;
+    }
+
+    uint32_t ES1Benchmark::GetMixedArray(const uint32_t count, std::vector<Exchange::IES1Benchmark::MixedElement>& value)
+    {
+        value.assign(s_staticMixedVec.begin(), s_staticMixedVec.begin() + count);
+        return Core::ERROR_NONE;
+    }
+
+    uint32_t ES1Benchmark::GetNestedObjects(const uint32_t count, std::vector<Exchange::IES1Benchmark::NestedObject>& value)
+    {
+        value.assign(s_staticNestedVec.begin(), s_staticNestedVec.begin() + count);
+        return Core::ERROR_NONE;
+    }
+
+    uint32_t ES1Benchmark::GetUint32(uint32_t& value)
+    {
+        std::memcpy(&value, &s_staticUint32, sizeof(value));
+        return Core::ERROR_NONE;
+    }
+
+    uint32_t ES1Benchmark::GetUint64(uint64_t& value)
+    {
+        std::memcpy(&value, &s_staticUint64, sizeof(value));
+        return Core::ERROR_NONE;
+    }
+
+    uint32_t ES1Benchmark::GetBool(bool& value)
+    {
+        std::memcpy(&value, &s_staticBool, sizeof(value));
+        return Core::ERROR_NONE;
+    }
+
+    uint32_t ES1Benchmark::GetFloat(float& value)
+    {
+        std::memcpy(&value, &s_staticFloat, sizeof(value));
+        return Core::ERROR_NONE;
+    }
+
+    uint32_t ES1Benchmark::GetDouble(double& value)
+    {
+        std::memcpy(&value, &s_staticDouble, sizeof(value));
+        return Core::ERROR_NONE;
+    }
+
+    // Calibration only - times a memcpy of 'size' bytes in isolation. Not called as
+    // part of the Get*/Set* benchmark path; the client invokes this separately to
+    // learn what a copy of a given size costs on this device.
+    uint32_t ES1Benchmark::MeasureCopyCost(const uint32_t size, uint64_t& us)
+    {
+        std::vector<uint8_t> dst(size);
+
+        auto t0 = std::chrono::steady_clock::now();
+        std::memcpy(dst.data(), s_staticCharBuffer, size);
+        auto t1 = std::chrono::steady_clock::now();
+
+        us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+        return Core::ERROR_NONE;
+    }
+
+    // Calibration only - mirrors GetString exactly: resize() is included in the
+    // timed window (unlike MeasureCopyCost/GetArray, where sizing happens in the
+    // framework via @length, not in the handler).
+    uint32_t ES1Benchmark::MeasureStringResizeCost(const uint32_t size, uint64_t& us)
+    {
+        string dst;
+
+        auto t0 = std::chrono::steady_clock::now();
+        dst.resize(size);
+        std::memcpy(&dst[0], s_staticCharBuffer, size);
+        auto t1 = std::chrono::steady_clock::now();
+
+        us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+        return Core::ERROR_NONE;
+    }
+
+    // Calibration only - mirrors exactly what GetMixedArray does internally (assign
+    // onto a freshly default-constructed vector, no pre-reserve), so this is a
+    // faithful stand-in for that handler's real cost, not just a similar-looking one.
+    uint32_t ES1Benchmark::MeasureMixedAssignCost(const uint32_t count, uint64_t& us)
+    {
+        std::vector<Exchange::IES1Benchmark::MixedElement> dst;
+
+        auto t0 = std::chrono::steady_clock::now();
+        dst.assign(s_staticMixedVec.begin(), s_staticMixedVec.begin() + count);
+        auto t1 = std::chrono::steady_clock::now();
+
+        us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+        return Core::ERROR_NONE;
+    }
+
+    // Calibration only - mirrors GetNestedObjects the same way.
+    uint32_t ES1Benchmark::MeasureNestedAssignCost(const uint32_t count, uint64_t& us)
+    {
+        std::vector<Exchange::IES1Benchmark::NestedObject> dst;
+
+        auto t0 = std::chrono::steady_clock::now();
+        dst.assign(s_staticNestedVec.begin(), s_staticNestedVec.begin() + count);
+        auto t1 = std::chrono::steady_clock::now();
+
+        us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
         return Core::ERROR_NONE;
     }
 
