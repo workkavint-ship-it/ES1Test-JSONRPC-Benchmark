@@ -109,52 +109,53 @@ namespace Plugin {
         return string("ES1 JSON-RPC round-trip benchmark echo plugin");
     }
 
-    // Note: 'echo' is intentionally left unassigned below. Copying the
-    // payload into the out-parameter costs CPU time inside the handler,
-    // which would pollute the JSON-RPC round-trip measurement. Only the
-    // dispatch/(de)serialization cost of the framework is being measured.
+    // Note: 'value' is an @inout parameter - the framework deserializes the
+    // request straight into it and serializes the same variable back out as
+    // the response, so it already holds the correct echoed value on entry.
+    // No copy/assignment is needed (or wanted - that would cost CPU time
+    // inside the handler and pollute the JSON-RPC round-trip measurement).
 
-    uint32_t ES1Benchmark::EchoString(const string& /* value */, string& /* echo */)
+    uint32_t ES1Benchmark::EchoString(string& /* value */)
     {
         return Core::ERROR_NONE;
     }
 
-    uint32_t ES1Benchmark::EchoArray(const std::vector<uint8_t>& /* values */, std::vector<uint8_t>& /* echo */)
+    uint32_t ES1Benchmark::EchoArray(std::vector<uint8_t>& /* values */)
     {
         return Core::ERROR_NONE;
     }
 
-    uint32_t ES1Benchmark::EchoMixedArray(const std::vector<Exchange::IES1Benchmark::MixedElement>& /* elements */, std::vector<Exchange::IES1Benchmark::MixedElement>& /* echo */)
+    uint32_t ES1Benchmark::EchoMixedArray(std::vector<Exchange::IES1Benchmark::MixedElement>& /* elements */)
     {
         return Core::ERROR_NONE;
     }
 
-    uint32_t ES1Benchmark::EchoNestedObjects(const std::vector<Exchange::IES1Benchmark::NestedObject>& /* objects */, std::vector<Exchange::IES1Benchmark::NestedObject>& /* echo */)
+    uint32_t ES1Benchmark::EchoNestedObjects(std::vector<Exchange::IES1Benchmark::NestedObject>& /* objects */)
     {
         return Core::ERROR_NONE;
     }
 
-    uint32_t ES1Benchmark::EchoUint32(const uint32_t /* value */, uint32_t& /* echo */)
+    uint32_t ES1Benchmark::EchoUint32(uint32_t& /* value */)
     {
         return Core::ERROR_NONE;
     }
 
-    uint32_t ES1Benchmark::EchoUint64(const uint64_t /* value */, uint64_t& /* echo */)
+    uint32_t ES1Benchmark::EchoUint64(uint64_t& /* value */)
     {
         return Core::ERROR_NONE;
     }
 
-    uint32_t ES1Benchmark::EchoBool(const bool /* value */, bool& /* echo */)
+    uint32_t ES1Benchmark::EchoBool(bool& /* value */)
     {
         return Core::ERROR_NONE;
     }
 
-    uint32_t ES1Benchmark::EchoFloat(const float /* value */, float& /* echo */)
+    uint32_t ES1Benchmark::EchoFloat(float& /* value */)
     {
         return Core::ERROR_NONE;
     }
 
-    uint32_t ES1Benchmark::EchoDouble(const double /* value */, double& /* echo */)
+    uint32_t ES1Benchmark::EchoDouble(double& /* value */)
     {
         return Core::ERROR_NONE;
     }
