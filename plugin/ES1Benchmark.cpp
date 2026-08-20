@@ -217,9 +217,10 @@ namespace Plugin {
         return Core::ERROR_NONE;
     }
 
-    uint32_t ES1Benchmark::GetArray(const uint32_t size, uint8_t values[])
+    uint32_t ES1Benchmark::GetArray(const uint32_t size, std::vector<uint8_t>& value)
     {
-        std::memcpy(values, s_staticByteBuffer, size);
+        value.resize(size);
+        std::memcpy(value.data(), s_staticByteBuffer, size);
         return Core::ERROR_NONE;
     }
 
@@ -265,15 +266,16 @@ namespace Plugin {
         return Core::ERROR_NONE;
     }
 
-    // Calibration only - times a memcpy of 'size' bytes in isolation. Not called as
-    // part of the Get*/Set* benchmark path; the client invokes this separately to
-    // learn what a copy of a given size costs on this device.
+    // Calibration only - mirrors GetArray exactly: resize() is included in the
+    // timed window, since GetArray's vector must be sized before it can be
+    // memcpy'd into (same reasoning as MeasureStringResizeCost/GetString).
     uint32_t ES1Benchmark::MeasureCopyCost(const uint32_t size, uint64_t& us)
     {
-        std::vector<uint8_t> dst(size);
+        std::vector<uint8_t> dst;
 
         auto t0 = std::chrono::steady_clock::now();
-        std::memcpy(dst.data(), s_staticCharBuffer, size);
+        dst.resize(size);
+        std::memcpy(dst.data(), s_staticByteBuffer, size);
         auto t1 = std::chrono::steady_clock::now();
 
         us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();

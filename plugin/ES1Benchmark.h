@@ -73,7 +73,7 @@ namespace Plugin {
         uint32_t GetString(const uint32_t size, string& value) override;
 
         uint32_t SetArray(const std::vector<uint8_t>& value) override;
-        uint32_t GetArray(const uint32_t size, uint8_t values[]) override;
+        uint32_t GetArray(const uint32_t size, std::vector<uint8_t>& value) override;
 
         uint32_t SetMixedArray(const std::vector<Exchange::IES1Benchmark::MixedElement>& value) override;
         uint32_t GetMixedArray(const uint32_t count, std::vector<Exchange::IES1Benchmark::MixedElement>& value) override;
