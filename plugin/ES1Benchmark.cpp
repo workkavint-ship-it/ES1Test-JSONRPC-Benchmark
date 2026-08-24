@@ -19,6 +19,7 @@
 
 #include "ES1Benchmark.h"
 #include <arpa/inet.h>
+#include <array>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -26,6 +27,7 @@
 #include <sys/socket.h>
 #include <thread>
 #include <unistd.h>
+#include <utility>
 
 namespace WPEFramework {
 namespace Plugin {
@@ -49,11 +51,25 @@ namespace Plugin {
             ).count();
         }
 
-        // Static benchmark payload data. Built once, read-only for the rest of the
-        // plugin's lifetime, so concurrent Get* calls from multiple clients can read
-        // it without locking. Content is arbitrary - only size/shape matters here.
-        static char    s_staticCharBuffer[4 * 1024 * 1024];  // GetString source, up to @restrict:0..4M
-        static uint8_t s_staticByteBuffer[256 * 1024];       // GetArray source, up to @restrict:0..256K
+        // Compile-time array fill: expands an index_sequence of N indices,
+        // discards each index, substitutes 'value' for every one. The whole
+        // array is computed during translation and placed directly in the
+        // binary's read-only data - no runtime fill code executes at all.
+        template <typename T, std::size_t... Is>
+        constexpr std::array<T, sizeof...(Is)> fill_array(T value, std::index_sequence<Is...>) {
+            return {{ (static_cast<void>(Is), value)... }};
+        }
+        template <typename T, std::size_t N>
+        constexpr std::array<T, N> fill_array(T value) {
+            return fill_array<T>(value, std::make_index_sequence<N>{});
+        }
+
+        // Static benchmark payload data. Computed entirely at compile time (see
+        // fill_array above), read-only for the plugin's lifetime, so concurrent
+        // Get* calls from multiple clients can read it without locking.
+        // Content is arbitrary - only size/shape matters here.
+        static constexpr auto s_staticCharBuffer = fill_array<char, 4 * 1024 * 1024>('A');       // GetString source, up to @restrict:0..4M
+        static constexpr auto s_staticByteBuffer = fill_array<uint8_t, 256 * 1024>(uint8_t{0xAA}); // GetArray source, up to @restrict:0..256K
 
         static uint32_t s_staticUint32 = 0xFFFFFFFFu;
         static uint64_t s_staticUint64 = 0xFFFFFFFFFFFFFFFFull;
@@ -90,12 +106,6 @@ namespace Plugin {
             return v;
         }();
 
-        // One-time fill for the flat static buffers (content is arbitrary).
-        const bool s_staticBuffersFilled = [] {
-            std::memset(s_staticCharBuffer, 'A', sizeof(s_staticCharBuffer));
-            std::memset(s_staticByteBuffer, 0xAA, sizeof(s_staticByteBuffer));
-            return true;
-        }();
     }
 
     const string ES1Benchmark::Initialize(PluginHost::IShell* service)
@@ -213,14 +223,14 @@ namespace Plugin {
     uint32_t ES1Benchmark::GetString(const uint32_t size, string& value)
     {
         value.resize(size);
-        std::memcpy(&value[0], s_staticCharBuffer, size);
+        std::memcpy(&value[0], s_staticCharBuffer.data(), size);
         return Core::ERROR_NONE;
     }
 
     uint32_t ES1Benchmark::GetArray(const uint32_t size, std::vector<uint8_t>& value)
     {
         value.resize(size);
-        std::memcpy(value.data(), s_staticByteBuffer, size);
+        std::memcpy(value.data(), s_staticByteBuffer.data(), size);
         return Core::ERROR_NONE;
     }
 
@@ -275,7 +285,7 @@ namespace Plugin {
 
         auto t0 = std::chrono::steady_clock::now();
         dst.resize(size);
-        std::memcpy(dst.data(), s_staticByteBuffer, size);
+        std::memcpy(dst.data(), s_staticByteBuffer.data(), size);
         auto t1 = std::chrono::steady_clock::now();
 
         us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
@@ -283,15 +293,16 @@ namespace Plugin {
     }
 
     // Calibration only - mirrors GetString exactly: resize() is included in the
-    // timed window (unlike MeasureCopyCost/GetArray, where sizing happens in the
-    // framework via @length, not in the handler).
+    // timed window (same reasoning as MeasureCopyCost/GetArray above, which also
+    // resize() a std::vector before the memcpy, now that GetArray uses
+    // std::vector<uint8_t> instead of the old raw-array @length mechanism).
     uint32_t ES1Benchmark::MeasureStringResizeCost(const uint32_t size, uint64_t& us)
     {
         string dst;
 
         auto t0 = std::chrono::steady_clock::now();
         dst.resize(size);
-        std::memcpy(&dst[0], s_staticCharBuffer, size);
+        std::memcpy(&dst[0], s_staticCharBuffer.data(), size);
         auto t1 = std::chrono::steady_clock::now();
 
         us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
