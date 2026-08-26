@@ -1,0 +1,39 @@
+# ES1Bench on-device client configuration.
+# Installed to /opt/es1.config - edit in place and re-run
+# `systemctl start es1bench.service` (or restart es1bench-coldstart.service)
+# to pick up changes; no rebuild needed.
+
+# coldstart: wait for Thunder's JSON-RPC port to come up before running.
+# warm:      assume Thunder is already up and run immediately.
+mode=warm
+
+# ws:   WebSocket JSON-RPC (ws://host:port/jsonrpc)
+# http: HTTP JSON-RPC (http://host:port/jsonrpc)
+transport=ws
+
+# session: one persistent HTTP connection reused for all iterations.
+# oneshot: fresh TCP connection per request (curl-style). Ignored for transport=ws.
+http_mode=session
+
+# single:   run only the one tier named by 'size' below.
+# multiple: sweep every tier (500B, 5KB, 50KB, 150KB, 500KB, 1MB, 4MB).
+tier=single
+size=5KB
+
+iterations=20
+warmup=3
+
+# One value runs a single client count. A comma-separated list sweeps each
+# one in turn against every test, e.g. "32,8,1" - matching the Python
+# matrix runner's CLIENT_COUNTS sweep, all in this one run.
+clients=1
+
+skip_scalars=false
+
+host=127.0.0.1
+port=55555
+timeout_s=30
+
+# Only used when mode=coldstart.
+coldstart_poll_ms=100
+coldstart_timeout_s=120

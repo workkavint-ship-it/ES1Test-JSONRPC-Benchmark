@@ -30,3 +30,8 @@ include(CmakeHelperFunctions)
 if(PLUGIN_ES1BENCHMARK)
     add_subdirectory(plugin)
 endif()
+
+option(PLUGIN_ES1BENCHMARK_CLIENT "Build the standalone on-device es1client benchmark tool" ON)
+if(PLUGIN_ES1BENCHMARK_CLIENT)
+    add_subdirectory(client)
+endif()
