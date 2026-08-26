@@ -1,0 +1,43 @@
+# ES1Bench cold-start client configuration.
+# Installed to /opt/es1-coldstart.config - used only by es1bench-coldstart.service,
+# which runs before Thunder starts. Kept separate from /opt/es1.config (the
+# on-demand unit's config) because that one defaults to mode=warm - sharing
+# a single file between "runs before Thunder" and "runs after Thunder" would
+# mean one of the two always uses the wrong mode.
+# Edit in place and restart the service to pick up changes; no rebuild needed.
+
+# Must stay coldstart here: waits for Thunder's JSON-RPC port to come up
+# before running anything, since this unit starts before Thunder exists.
+mode=coldstart
+
+# ws:   WebSocket JSON-RPC (ws://host:port/jsonrpc)
+# http: HTTP JSON-RPC (http://host:port/jsonrpc)
+transport=ws
+
+# session: one persistent HTTP connection reused for all iterations.
+# oneshot: fresh TCP connection per request (curl-style). Ignored for transport=ws.
+http_mode=session
+
+# single:   run only the one tier named by 'size' below.
+# multiple: sweep every tier (500B, 5KB, 50KB, 150KB, 500KB, 1MB, 4MB).
+tier=single
+size=5KB
+
+iterations=20
+warmup=3
+
+# One value runs a single client count. A comma-separated list sweeps each
+# one in turn against every test, e.g. "32,8,1" - matching the Python
+# matrix runner's CLIENT_COUNTS sweep, all in this one run.
+clients=1
+
+skip_scalars=false
+
+host=127.0.0.1
+port=55555
+timeout_s=30
+
+# How often to retry connecting while waiting for Thunder, and how long to
+# wait in total before giving up and exiting without running anything.
+coldstart_poll_ms=100
+coldstart_timeout_s=120
