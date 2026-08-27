@@ -956,7 +956,6 @@ int main(int argc, char** argv) {
             return 1;
         }
         std::cout << "{\"event\":\"coldstart_ready\",\"boot_to_ready_seconds\":" << bootToReady << "}" << std::endl;
-        std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 
     std::vector<TestCase> tests;
