@@ -897,17 +897,33 @@ static void RunTest(const Config& cfg, const TestCase& test, int clientCount) {
 }
 
 // ===========================================================================
-// Cold-start gate: poll-connect until Thunder's JSON-RPC port is up
+// Cold-start gate: wait until the ES1Benchmark JSON-RPC method is ready
 // ===========================================================================
+
+static bool IsBenchmarkReady(const Config& cfg) {
+    std::string request = BuildRequest("getint64", "{}");
+    std::string response;
+
+    if (cfg.transport == "ws") {
+        WsClient ws;
+        return ws.Connect(cfg.host, cfg.port, /*timeoutS=*/1)
+            && ws.SendText(request)
+            && ws.RecvText(&response)
+            && !HasError(response)
+            && !ExtractResultText(response).empty();
+    }
+
+    HttpClient http(cfg.host, cfg.port, /*timeoutS=*/1, /*oneShot=*/true);
+    return http.Post(request, &response)
+        && !HasError(response)
+        && !ExtractResultText(response).empty();
+}
 
 static bool WaitForThunderReady(const Config& cfg, double* bootToReadySeconds) {
     auto start = std::chrono::steady_clock::now();
     auto deadline = start + std::chrono::seconds(cfg.coldstart_timeout_s);
     while (std::chrono::steady_clock::now() < deadline) {
-        std::string err;
-        int fd = ConnectTcp(cfg.host, cfg.port, /*timeoutS=*/1, &err);
-        if (fd >= 0) {
-            ::close(fd);
+        if (IsBenchmarkReady(cfg)) {
             *bootToReadySeconds = std::chrono::duration<double>(
                 std::chrono::steady_clock::now() - start).count();
             return true;
@@ -933,9 +949,9 @@ int main(int argc, char** argv) {
 
     if (cfg.mode == "coldstart") {
         double bootToReady = 0;
-        std::cerr << "[es1client] Waiting for Thunder at " << cfg.host << ":" << cfg.port << " ...\n";
+        std::cerr << "[es1client] Waiting for ES1Benchmark at " << cfg.host << ":" << cfg.port << " ...\n";
         if (!WaitForThunderReady(cfg, &bootToReady)) {
-            std::cerr << "[es1client] Thunder never became reachable within "
+            std::cerr << "[es1client] ES1Benchmark never became ready within "
                       << cfg.coldstart_timeout_s << "s - aborting.\n";
             return 1;
         }
