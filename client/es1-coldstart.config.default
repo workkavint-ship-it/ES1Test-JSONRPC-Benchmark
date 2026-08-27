@@ -20,7 +20,7 @@ http_mode=session
 
 # single:   run only the one tier named by 'size' below.
 # multiple: sweep every tier (500B, 5KB, 50KB, 150KB, 500KB, 1MB, 4MB).
-tier=single
+tier=multiple
 size=5KB
 
 iterations=20
@@ -29,12 +29,12 @@ warmup=3
 # One value runs a single client count. A comma-separated list sweeps each
 # one in turn against every test, e.g. "32,8,1" - matching the Python
 # matrix runner's CLIENT_COUNTS sweep, all in this one run.
-clients=1
+clients=32,8,1
 
 skip_scalars=false
 
 host=127.0.0.1
-port=55555
+port=9998
 timeout_s=30
 
 # How often to retry connecting while waiting for Thunder, and how long to
