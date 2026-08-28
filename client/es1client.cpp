@@ -155,6 +155,7 @@ struct Config {
     std::string http_mode   = "session";  // session | oneshot  (transport=http only)
     std::string tier        = "single";   // single | multiple
     std::string size        = "5KB";      // used only when tier=single
+    std::vector<std::string> tiers;       // optional list used when tier=multiple
     int iterations           = 20;
     int warmup               = 3;
     std::vector<int> clients = {1}; // comma-separated in the config, e.g. "32,8,1" for a full sweep
@@ -196,6 +197,15 @@ static bool LoadConfig(const std::string& path, Config* cfgOut) {
         else if (key == "http_mode") cfg.http_mode = val;
         else if (key == "tier") cfg.tier = val;
         else if (key == "size") cfg.size = val;
+        else if (key == "tiers") {
+            cfg.tiers.clear();
+            std::stringstream ss(val);
+            std::string tierName;
+            while (std::getline(ss, tierName, ',')) {
+                std::string trimmed = Trim(tierName);
+                if (!trimmed.empty()) cfg.tiers.push_back(trimmed);
+            }
+        }
         else if (key == "iterations") cfg.iterations = std::stoi(val);
         else if (key == "warmup") cfg.warmup = std::stoi(val);
         else if (key == "clients") {
@@ -975,8 +985,22 @@ int main(int argc, char** argv) {
     }
 
     if (cfg.tier == "multiple") {
-        for (auto& t : kAllTiers) {
-            auto tierTests = BuildTierTests(t.first, t.second);
+        std::vector<std::pair<std::string, long>> selectedTiers;
+        if (cfg.tiers.empty()) {
+            selectedTiers = kAllTiers;
+        } else {
+            for (const auto& tierName : cfg.tiers) {
+                auto tier = std::find_if(kAllTiers.begin(), kAllTiers.end(),
+                    [&](const auto& candidate) { return candidate.first == tierName; });
+                if (tier == kAllTiers.end()) {
+                    std::cerr << "[es1client] Unknown tier in tiers=: " << tierName << "\n";
+                    return 1;
+                }
+                selectedTiers.push_back(*tier);
+            }
+        }
+        for (const auto& tier : selectedTiers) {
+            auto tierTests = BuildTierTests(tier.first, tier.second);
             tests.insert(tests.end(), tierTests.begin(), tierTests.end());
         }
     } else {
