@@ -641,15 +641,22 @@ static Stats ComputeStats(const std::vector<double>& roundtripSeconds, int skipp
 class Barrier {
 public:
     explicit Barrier(unsigned count) : count_(count), initial_(count), generation_(0) {}
+    void Abort() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        aborted_ = true;
+        ++generation_;
+        cv_.notify_all();
+    }
     void Wait() {
         std::unique_lock<std::mutex> lock(mutex_);
+        if (aborted_) return;
         unsigned gen = generation_;
         if (--count_ == 0) {
             ++generation_;
             count_ = initial_;
             cv_.notify_all();
         } else {
-            cv_.wait(lock, [this, gen] { return gen != generation_; });
+            cv_.wait(lock, [this, gen] { return aborted_ || gen != generation_; });
         }
     }
 private:
@@ -658,6 +665,7 @@ private:
     unsigned count_;
     unsigned initial_;
     unsigned generation_;
+    bool aborted_ = false;
 };
 
 // ===========================================================================
@@ -752,6 +760,7 @@ static ClientResult RunOneClient(const Config& cfg, const TestCase& test, Barrie
         ws.reset(new WsClient());
         if (!ws->Connect(cfg.host, cfg.port, cfg.timeout_s)) {
             std::cerr << "[es1client] WS connect failed: " << ws->LastError() << "\n";
+            if (barrier) barrier->Abort();
             result.skipped = cfg.iterations;
             result.roundtripSeconds.assign(cfg.iterations, -1.0);
             return result;
