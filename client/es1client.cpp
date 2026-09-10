@@ -34,6 +34,7 @@
 // redirected straight into a log file or piped into another tool.
 
 #include <arpa/inet.h>
+#include <dirent.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -48,10 +49,14 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <iomanip>
+#include <initializer_list>
 #include <iostream>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <random>
@@ -155,7 +160,6 @@ struct Config {
     std::string http_mode   = "session";  // session | oneshot  (transport=http only)
     std::string tier        = "single";   // single | multiple
     std::string size        = "5KB";      // used only when tier=single
-    std::vector<std::string> tiers;       // optional list used when tier=multiple
     int iterations           = 20;
     int warmup               = 3;
     std::vector<int> clients = {1}; // comma-separated in the config, e.g. "32,8,1" for a full sweep
@@ -165,6 +169,8 @@ struct Config {
     int timeout_s             = 30;
     int coldstart_poll_ms     = 100;
     int coldstart_timeout_s   = 120;
+    bool memory_measure       = true;
+    int memory_sample_ms      = 10;
 };
 
 static std::string Trim(const std::string& s) {
@@ -197,15 +203,6 @@ static bool LoadConfig(const std::string& path, Config* cfgOut) {
         else if (key == "http_mode") cfg.http_mode = val;
         else if (key == "tier") cfg.tier = val;
         else if (key == "size") cfg.size = val;
-        else if (key == "tiers") {
-            cfg.tiers.clear();
-            std::stringstream ss(val);
-            std::string tierName;
-            while (std::getline(ss, tierName, ',')) {
-                std::string trimmed = Trim(tierName);
-                if (!trimmed.empty()) cfg.tiers.push_back(trimmed);
-            }
-        }
         else if (key == "iterations") cfg.iterations = std::stoi(val);
         else if (key == "warmup") cfg.warmup = std::stoi(val);
         else if (key == "clients") {
@@ -224,6 +221,8 @@ static bool LoadConfig(const std::string& path, Config* cfgOut) {
         else if (key == "timeout_s") cfg.timeout_s = std::stoi(val);
         else if (key == "coldstart_poll_ms") cfg.coldstart_poll_ms = std::stoi(val);
         else if (key == "coldstart_timeout_s") cfg.coldstart_timeout_s = std::stoi(val);
+        else if (key == "memory_measure") cfg.memory_measure = (val == "true" || val == "1");
+        else if (key == "memory_sample_ms") cfg.memory_sample_ms = std::max(1, std::stoi(val));
     }
     *cfgOut = cfg;
     return true;
@@ -692,6 +691,499 @@ struct TestCase {
     std::string measureParamsJson;
 };
 
+// ===========================================================================
+// Automatic target memory measurement
+// ===========================================================================
+
+static std::string JsonEscape(const std::string& value) {
+    std::string out;
+    for (char c : value) {
+        if (c == '\\' || c == '"') {
+            out.push_back('\\');
+            out.push_back(c);
+        } else if (c == '\n') {
+            out += "\\n";
+        } else if (c == '\r') {
+            out += "\\r";
+        } else {
+            out.push_back(c);
+        }
+    }
+    return out;
+}
+
+static std::string ReadWholeFile(const std::string& path) {
+    std::ifstream in(path, std::ios::in | std::ios::binary);
+    if (!in.is_open()) return "";
+    return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+}
+
+static bool IsNumericPidName(const char* name) {
+    if (name == nullptr || *name == '\0') return false;
+    for (const char* p = name; *p != '\0'; ++p) {
+        if (*p < '0' || *p > '9') return false;
+    }
+    return true;
+}
+
+static std::string ReadProcArgv0(int pid) {
+    std::string cmdline = ReadWholeFile("/proc/" + std::to_string(pid) + "/cmdline");
+    size_t nul = cmdline.find('\0');
+    return Trim(nul == std::string::npos ? cmdline : cmdline.substr(0, nul));
+}
+
+// Matches on the exact basename of argv[0] rather than a substring search
+// over the whole cmdline - a loose "contains WPEFramework" match can also
+// hit wrapper scripts, log tools, or anything else that merely references
+// the name in one of its arguments.
+static bool IsWpeFrameworkPid(int pid) {
+    std::string argv0 = ReadProcArgv0(pid);
+    if (argv0.empty()) return false;
+    size_t slash = argv0.find_last_of('/');
+    std::string base = (slash == std::string::npos) ? argv0 : argv0.substr(slash + 1);
+    return base == "WPEFramework";
+}
+
+// Parent PID from /proc/<pid>/stat, field 4. The comm field (field 2) is
+// parenthesized and can itself contain spaces or parentheses, so the safe
+// way to find the end of it is the *last* ')' in the line, not the first.
+static int ReadProcPpid(int pid) {
+    std::string stat = ReadWholeFile("/proc/" + std::to_string(pid) + "/stat");
+    size_t lastParen = stat.find_last_of(')');
+    if (lastParen == std::string::npos || lastParen + 2 >= stat.size()) return -1;
+    std::istringstream rest(stat.substr(lastParen + 2));
+    char state = 0;
+    int ppid = -1;
+    rest >> state >> ppid;
+    return rest.fail() ? -1 : ppid;
+}
+
+static std::vector<int> CandidateWpeFrameworkPids() {
+    std::vector<int> pids;
+    std::ifstream pidFile("/tmp/wpeframework.pid");
+    int pid = 0;
+    if (pidFile >> pid && pid > 0) pids.push_back(pid);
+
+    DIR* proc = ::opendir("/proc");
+    if (proc == nullptr) return pids;
+    while (dirent* entry = ::readdir(proc)) {
+        if (IsNumericPidName(entry->d_name)) {
+            int candidate = std::atoi(entry->d_name);
+            if (candidate > 0 && std::find(pids.begin(), pids.end(), candidate) == pids.end()) {
+                pids.push_back(candidate);
+            }
+        }
+    }
+    ::closedir(proc);
+    return pids;
+}
+
+struct MemoryTarget {
+    int pid = -1;
+    std::string cgroupPath;
+    std::string cgroupCurrentFile;
+    std::string cgroupPeakFile;
+    bool cgroupIsRoot = false;
+};
+
+static void ResolveCgroupFiles(int pid, MemoryTarget* target) {
+    std::string cgroup = ReadWholeFile("/proc/" + std::to_string(pid) + "/cgroup");
+    std::istringstream lines(cgroup);
+    std::string line;
+    while (std::getline(lines, line)) {
+        size_t firstColon = line.find(':');
+        size_t secondColon = line.find(':', firstColon == std::string::npos ? 0 : firstColon + 1);
+        if (firstColon == std::string::npos || secondColon == std::string::npos) continue;
+
+        std::string controllers = line.substr(firstColon + 1, secondColon - firstColon - 1);
+        std::string path = line.substr(secondColon + 1);
+        target->cgroupPath = path;
+        target->cgroupIsRoot = (path.empty() || path == "/");
+
+        std::vector<std::string> roots;
+        if (controllers.empty()) {
+            roots.push_back("/sys/fs/cgroup");
+        } else if (controllers.find("memory") != std::string::npos) {
+            roots.push_back("/sys/fs/cgroup/memory");
+            roots.push_back("/sys/fs/cgroup");
+        }
+
+        for (const std::string& root : roots) {
+            std::string base = root + path;
+            std::string current = base + "/memory.current";
+            std::string peak = base + "/memory.peak";
+            if (std::ifstream(current).good()) {
+                target->cgroupCurrentFile = current;
+                target->cgroupPeakFile = peak;
+                break;
+            }
+            current = base + "/memory.usage_in_bytes";
+            peak = base + "/memory.max_usage_in_bytes";
+            if (std::ifstream(current).good()) {
+                target->cgroupCurrentFile = current;
+                target->cgroupPeakFile = peak;
+                break;
+            }
+        }
+        if (!target->cgroupCurrentFile.empty()) break;
+    }
+}
+
+// Picks one WPEFramework process to measure. /proc iteration order is not
+// guaranteed, and out-of-process Thunder plugin hosts are frequently other
+// copies of the same WPEFramework binary - so among every exact-basename
+// match, prefer the one that is NOT itself a child of another match (an OOP
+// host's parent is typically the main process), falling back to the lowest
+// PID if that doesn't narrow it to one.
+static bool DiscoverMemoryTarget(MemoryTarget* target, std::string* reason) {
+    std::vector<int> matches;
+    for (int pid : CandidateWpeFrameworkPids()) {
+        if (IsWpeFrameworkPid(pid)) matches.push_back(pid);
+    }
+    if (matches.empty()) {
+        if (reason) *reason = "WPEFramework process not found";
+        return false;
+    }
+
+    int chosen = -1;
+    for (int pid : matches) {
+        int ppid = ReadProcPpid(pid);
+        bool parentIsAlsoMatch = (ppid > 0) &&
+            (std::find(matches.begin(), matches.end(), ppid) != matches.end());
+        if (!parentIsAlsoMatch && (chosen < 0 || pid < chosen)) {
+            chosen = pid;
+        }
+    }
+    if (chosen < 0) {
+        chosen = *std::min_element(matches.begin(), matches.end());
+    }
+
+    target->pid = chosen;
+    ResolveCgroupFiles(chosen, target);
+    return true;
+}
+
+static int64_t ReadIntegerFile(const std::string& path) {
+    if (path.empty()) return -1;
+    std::ifstream in(path);
+    long long value = -1;
+    if (!(in >> value) || value < 0) return -1;
+    return static_cast<int64_t>(value);
+}
+
+// Scans one /proc file once, matching each line's prefix against every
+// requested key in a single pass - avoids reopening and rescanning the same
+// file once per key. This runs on a background thread every
+// memory_sample_ms while the timed RPC loop is also running, so every extra
+// file open/scan here is overhead sitting in that same window.
+static void ReadKbFieldsMulti(const std::string& path,
+                               std::initializer_list<std::pair<const char*, int64_t*>> fields,
+                               bool toBytes) {
+    std::ifstream in(path);
+    if (!in.is_open()) return;
+    std::string line;
+    while (std::getline(in, line)) {
+        for (auto& field : fields) {
+            size_t keyLen = std::strlen(field.first);
+            if (line.compare(0, keyLen, field.first) == 0) {
+                std::istringstream value(line.substr(keyLen));
+                long long kb = -1;
+                if (value >> kb && kb >= 0) {
+                    *field.second = toBytes ? static_cast<int64_t>(kb) * 1024 : static_cast<int64_t>(kb);
+                }
+                break;
+            }
+        }
+    }
+}
+
+struct MemorySample {
+    bool valid = false;
+    int64_t rss = -1;
+    int64_t vmSize = -1;
+    int64_t vmPeak = -1;
+    int64_t pss = -1;
+    int64_t privateDirty = -1;
+    int64_t anonymous = -1;
+    int64_t cgroupCurrent = -1;
+    int64_t cgroupPeak = -1;
+    int64_t memTotalKb = -1;
+    int64_t memFreeKb = -1;
+    int64_t memAvailableKb = -1;
+    int64_t buffersKb = -1;
+    int64_t cachedKb = -1;
+    int64_t swapTotalKb = -1;
+    int64_t swapFreeKb = -1;
+    std::string reason;
+};
+
+static MemorySample ReadMemorySample(const MemoryTarget& target) {
+    MemorySample sample;
+    if (!IsWpeFrameworkPid(target.pid)) {
+        sample.reason = "WPEFramework PID disappeared or changed";
+        return sample;
+    }
+
+    ReadKbFieldsMulti("/proc/" + std::to_string(target.pid) + "/status",
+        {{"VmRSS:", &sample.rss}, {"VmSize:", &sample.vmSize}, {"VmPeak:", &sample.vmPeak}},
+        /*toBytes=*/true);
+    if (sample.rss < 0) {
+        sample.reason = "VmRSS unavailable";
+        return sample;
+    }
+    ReadKbFieldsMulti("/proc/" + std::to_string(target.pid) + "/smaps_rollup",
+        {{"Pss:", &sample.pss}, {"Private_Dirty:", &sample.privateDirty}, {"Anonymous:", &sample.anonymous}},
+        /*toBytes=*/true);
+    sample.cgroupCurrent = ReadIntegerFile(target.cgroupCurrentFile);
+    sample.cgroupPeak = ReadIntegerFile(target.cgroupPeakFile);
+    ReadKbFieldsMulti("/proc/meminfo",
+        {{"MemTotal:", &sample.memTotalKb}, {"MemFree:", &sample.memFreeKb},
+         {"MemAvailable:", &sample.memAvailableKb}, {"Buffers:", &sample.buffersKb},
+         {"Cached:", &sample.cachedKb}, {"SwapTotal:", &sample.swapTotalKb},
+         {"SwapFree:", &sample.swapFreeKb}},
+        /*toBytes=*/false);
+    sample.valid = true;
+    return sample;
+}
+
+static std::string MiB(int64_t bytes) {
+    if (bytes < 0) return "null";
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(3)
+        << (static_cast<double>(bytes) / (1024.0 * 1024.0));
+    return out.str();
+}
+
+static std::string MiBDouble(double bytes) {
+    if (bytes < 0) return "null";
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(3)
+        << (bytes / (1024.0 * 1024.0));
+    return out.str();
+}
+
+static std::string KbValue(int64_t kb) {
+    return kb < 0 ? "null" : std::to_string(kb);
+}
+
+static std::string MiBFromKb(int64_t kb) {
+    if (kb < 0) return "null";
+    return MiBDouble(static_cast<double>(kb) * 1024.0);
+}
+
+static int64_t Delta(int64_t value, int64_t baseline) {
+    return (value >= 0 && baseline >= 0) ? value - baseline : -1;
+}
+
+class MemoryMeasurement {
+public:
+    MemoryMeasurement(bool enabled, int sampleMs)
+        : enabled_(enabled), sampleMs_(std::max(1, sampleMs)) {}
+
+    void Begin() {
+        if (!enabled_ || started_) return;
+        started_ = true;
+        if (!DiscoverMemoryTarget(&target_, &reason_)) return;
+        baseline_ = ReadMemorySample(target_);
+        if (!baseline_.valid) {
+            reason_ = baseline_.reason;
+            return;
+        }
+        peak_ = baseline_;
+        running_ = true;
+        sampler_ = std::thread([this] {
+            while (running_) {
+                Sample();
+                std::this_thread::sleep_for(std::chrono::milliseconds(sampleMs_));
+            }
+        });
+    }
+
+    void End() {
+        if (!started_ || !baseline_.valid) return;
+        running_ = false;
+        if (sampler_.joinable()) sampler_.join();
+        Sample();
+        end_ = last_;
+    }
+
+    std::string ToJson() const {
+        std::ostringstream out;
+        out << "{\"enabled\":" << (enabled_ ? "true" : "false");
+        if (!enabled_) {
+            out << "}";
+            return out.str();
+        }
+
+        // Reflects only whether the memory sampling itself succeeded
+        // (baseline and end snapshots both captured, no read failure along
+        // the way) - independent of whether individual RPC calls in this
+        // test were skipped. An unrelated call timeout doesn't affect
+        // whether the RSS samples taken throughout the test are trustworthy,
+        // and gating on it made 'valid' hardest to get exactly at high
+        // concurrency, where memory data matters most. The top-level
+        // "skipped" field already reports call failures separately.
+        bool valid = baseline_.valid && end_.valid && reason_.empty();
+        double average = sampleCount_ > 0
+            ? static_cast<double>(sumRss_) / static_cast<double>(sampleCount_)
+            : -1.0;
+        out << ",\"available\":" << (baseline_.valid ? "true" : "false")
+            << ",\"valid\":" << (valid ? "true" : "false")
+            << ",\"pid\":" << target_.pid
+            << ",\"cgroup\":\"" << JsonEscape(target_.cgroupPath) << "\""
+            << ",\"cgroup_is_root\":" << (target_.cgroupIsRoot ? "true" : "false")
+            << ",\"sample_interval_ms\":" << sampleMs_
+            << ",\"sample_count\":" << sampleCount_
+            << ",\"baseline_rss_mib\":" << MiB(baseline_.rss)
+            << ",\"peak_rss_mib\":" << MiB(peak_.rss)
+            << ",\"end_rss_mib\":" << MiB(end_.rss)
+            << ",\"peak_delta_mib\":" << MiB(Delta(peak_.rss, baseline_.rss))
+            << ",\"end_delta_mib\":" << MiB(Delta(end_.rss, baseline_.rss))
+            << ",\"average_rss_mib\":" << MiBDouble(average)
+            << ",\"baseline_vmsize_mib\":" << MiB(baseline_.vmSize)
+            << ",\"peak_vmsize_mib\":" << MiB(peak_.vmSize)
+            << ",\"end_vmsize_mib\":" << MiB(end_.vmSize)
+            << ",\"peak_vmsize_delta_mib\":" << MiB(Delta(peak_.vmSize, baseline_.vmSize))
+            << ",\"baseline_vmpeak_mib\":" << MiB(baseline_.vmPeak)
+            << ",\"peak_vmpeak_mib\":" << MiB(peak_.vmPeak)
+            << ",\"end_vmpeak_mib\":" << MiB(end_.vmPeak)
+            << ",\"baseline_pss_mib\":" << MiB(baseline_.pss)
+            << ",\"peak_pss_mib\":" << MiB(peak_.pss)
+            << ",\"end_pss_mib\":" << MiB(end_.pss)
+            << ",\"baseline_private_dirty_mib\":" << MiB(baseline_.privateDirty)
+            << ",\"peak_private_dirty_mib\":" << MiB(peak_.privateDirty)
+            << ",\"end_private_dirty_mib\":" << MiB(end_.privateDirty)
+            << ",\"baseline_anonymous_mib\":" << MiB(baseline_.anonymous)
+            << ",\"peak_anonymous_mib\":" << MiB(peak_.anonymous)
+            << ",\"end_anonymous_mib\":" << MiB(end_.anonymous)
+            << ",\"baseline_cgroup_current_mib\":" << MiB(baseline_.cgroupCurrent)
+            << ",\"peak_cgroup_current_mib\":" << MiB(peak_.cgroupCurrent)
+            << ",\"end_cgroup_current_mib\":" << MiB(end_.cgroupCurrent)
+            << ",\"peak_cgroup_current_delta_mib\":"
+            << MiB(Delta(peak_.cgroupCurrent, baseline_.cgroupCurrent))
+            << ",\"baseline_cgroup_peak_mib\":" << MiB(baseline_.cgroupPeak)
+            << ",\"peak_cgroup_peak_mib\":" << MiB(peak_.cgroupPeak)
+            << ",\"end_cgroup_peak_mib\":" << MiB(end_.cgroupPeak)
+            << ",\"cgroup_peak_delta_mib\":"
+            << MiB(Delta(peak_.cgroupPeak, baseline_.cgroupPeak))
+            << ",\"system_memory\":{\"baseline_mem_total_kb\":" << KbValue(baseline_.memTotalKb)
+            << ",\"baseline_mem_free_kb\":" << KbValue(baseline_.memFreeKb)
+            << ",\"baseline_mem_available_kb\":" << KbValue(baseline_.memAvailableKb)
+            << ",\"baseline_buffers_kb\":" << KbValue(baseline_.buffersKb)
+            << ",\"baseline_cached_kb\":" << KbValue(baseline_.cachedKb)
+            << ",\"baseline_swap_total_kb\":" << KbValue(baseline_.swapTotalKb)
+            << ",\"baseline_swap_free_kb\":" << KbValue(baseline_.swapFreeKb)
+            << ",\"minimum_mem_free_kb\":" << KbValue(peak_.memFreeKb)
+            << ",\"minimum_mem_available_kb\":" << KbValue(peak_.memAvailableKb)
+            << ",\"minimum_swap_free_kb\":" << KbValue(peak_.swapFreeKb)
+            << ",\"peak_buffers_kb\":" << KbValue(peak_.buffersKb)
+            << ",\"peak_cached_kb\":" << KbValue(peak_.cachedKb)
+            << ",\"end_mem_total_kb\":" << KbValue(end_.memTotalKb)
+            << ",\"end_mem_free_kb\":" << KbValue(end_.memFreeKb)
+            << ",\"end_mem_available_kb\":" << KbValue(end_.memAvailableKb)
+            << ",\"end_buffers_kb\":" << KbValue(end_.buffersKb)
+            << ",\"end_cached_kb\":" << KbValue(end_.cachedKb)
+            << ",\"end_swap_total_kb\":" << KbValue(end_.swapTotalKb)
+            << ",\"end_swap_free_kb\":" << KbValue(end_.swapFreeKb)
+            << ",\"mem_free_drop_kb\":"
+            << KbValue(Delta(baseline_.memFreeKb, peak_.memFreeKb))
+            << ",\"mem_available_drop_kb\":"
+            << KbValue(Delta(baseline_.memAvailableKb, peak_.memAvailableKb))
+            << ",\"swap_free_drop_kb\":"
+            << KbValue(Delta(baseline_.swapFreeKb, peak_.swapFreeKb))
+            << ",\"baseline_mem_total_mib\":" << MiBFromKb(baseline_.memTotalKb)
+            << ",\"baseline_mem_free_mib\":" << MiBFromKb(baseline_.memFreeKb)
+            << ",\"baseline_mem_available_mib\":" << MiBFromKb(baseline_.memAvailableKb)
+            << ",\"minimum_mem_free_mib\":" << MiBFromKb(peak_.memFreeKb)
+            << ",\"minimum_mem_available_mib\":" << MiBFromKb(peak_.memAvailableKb)
+            << ",\"end_mem_total_mib\":" << MiBFromKb(end_.memTotalKb)
+            << ",\"end_mem_free_mib\":" << MiBFromKb(end_.memFreeKb)
+            << ",\"end_mem_available_mib\":" << MiBFromKb(end_.memAvailableKb)
+            << "},\"reason\":\"" << JsonEscape(reason_) << "\"}";
+        return out.str();
+    }
+
+private:
+    void Sample() {
+        MemorySample sample = ReadMemorySample(target_);
+        if (!sample.valid) {
+            if (reason_.empty()) reason_ = sample.reason;
+            return;
+        }
+        last_ = sample;
+        if (sample.rss > peak_.rss) peak_.rss = sample.rss;
+        if (sample.vmSize > peak_.vmSize) peak_.vmSize = sample.vmSize;
+        if (sample.vmPeak > peak_.vmPeak) peak_.vmPeak = sample.vmPeak;
+        if (sample.pss > peak_.pss) peak_.pss = sample.pss;
+        if (sample.privateDirty > peak_.privateDirty) peak_.privateDirty = sample.privateDirty;
+        if (sample.anonymous > peak_.anonymous) peak_.anonymous = sample.anonymous;
+        if (sample.cgroupCurrent > peak_.cgroupCurrent) peak_.cgroupCurrent = sample.cgroupCurrent;
+        if (sample.cgroupPeak > peak_.cgroupPeak) peak_.cgroupPeak = sample.cgroupPeak;
+        if (sample.memTotalKb > peak_.memTotalKb) peak_.memTotalKb = sample.memTotalKb;
+        if (sample.memFreeKb >= 0 && (peak_.memFreeKb < 0 || sample.memFreeKb < peak_.memFreeKb))
+            peak_.memFreeKb = sample.memFreeKb;
+        if (sample.memAvailableKb >= 0 && (peak_.memAvailableKb < 0 || sample.memAvailableKb < peak_.memAvailableKb))
+            peak_.memAvailableKb = sample.memAvailableKb;
+        if (sample.buffersKb > peak_.buffersKb) peak_.buffersKb = sample.buffersKb;
+        if (sample.cachedKb > peak_.cachedKb) peak_.cachedKb = sample.cachedKb;
+        if (sample.swapTotalKb > peak_.swapTotalKb) peak_.swapTotalKb = sample.swapTotalKb;
+        if (sample.swapFreeKb >= 0 && (peak_.swapFreeKb < 0 || sample.swapFreeKb < peak_.swapFreeKb))
+            peak_.swapFreeKb = sample.swapFreeKb;
+        sumRss_ += sample.rss;
+        ++sampleCount_;
+    }
+
+    bool enabled_ = false;
+    int sampleMs_ = 10;
+    bool started_ = false;
+    std::atomic<bool> running_{false};
+    std::thread sampler_;
+    MemoryTarget target_;
+    MemorySample baseline_;
+    MemorySample peak_;
+    MemorySample last_;
+    MemorySample end_;
+    int64_t sumRss_ = 0;
+    int sampleCount_ = 0;
+    std::string reason_;
+};
+
+// Single-use rendezvous: every client thread arrives once - whether or not
+// its own connection succeeded, since a failed client still needs to
+// "arrive" so this gate isn't stuck waiting on a party that will never show
+// up - then the owning thread starts memory sampling once all of them are
+// waiting, and releases everyone together right before the timed loop
+// begins.
+class StartGate {
+public:
+    explicit StartGate(unsigned expected) : expected_(expected) {}
+
+    void ArriveAndWait() {
+        std::unique_lock<std::mutex> lock(mutex_);
+        ++arrived_;
+        cv_.notify_all();
+        cv_.wait(lock, [this] { return released_; });
+    }
+
+    void WaitUntilReady() {
+        std::unique_lock<std::mutex> lock(mutex_);
+        cv_.wait(lock, [this] { return arrived_ == expected_; });
+    }
+
+    void Release() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        released_ = true;
+        cv_.notify_all();
+    }
+
+private:
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    unsigned expected_;
+    unsigned arrived_ = 0;
+    bool released_ = false;
+};
+
 static std::vector<TestCase> BuildTierTests(const std::string& tierLabel, long size) {
     std::vector<TestCase> tests;
 
@@ -759,7 +1251,9 @@ struct ClientResult {
     std::string firstResponse;
 };
 
-static ClientResult RunOneClient(const Config& cfg, const TestCase& test, Barrier* barrier) {
+static ClientResult RunOneClient(const Config& cfg, const TestCase& test, Barrier* barrier,
+                                 StartGate* startGate, MemoryMeasurement* memory,
+                                 bool startMemoryHere) {
     ClientResult result;
 
     std::unique_ptr<WsClient> ws;
@@ -770,7 +1264,14 @@ static ClientResult RunOneClient(const Config& cfg, const TestCase& test, Barrie
         ws.reset(new WsClient());
         if (!ws->Connect(cfg.host, cfg.port, cfg.timeout_s)) {
             std::cerr << "[es1client] WS connect failed: " << ws->LastError() << "\n";
+            // Barrier still needs Abort() to avoid deadlocking the
+            // survivors' per-round waits below, but StartGate is a one-time
+            // rendezvous before that loop even starts - this thread just
+            // arrives immediately with nothing to contribute, so the other
+            // clients' memory measurement isn't held hostage by one bad
+            // connection.
             if (barrier) barrier->Abort();
+            if (startGate) startGate->ArriveAndWait();
             result.skipped = cfg.iterations;
             result.roundtripSeconds.assign(cfg.iterations, -1.0);
             return result;
@@ -791,6 +1292,12 @@ static ClientResult RunOneClient(const Config& cfg, const TestCase& test, Barrie
         doCall(&resp);
     }
     if (barrier) barrier->Wait();
+
+    if (startGate) {
+        startGate->ArriveAndWait();
+    } else if (startMemoryHere && memory) {
+        memory->Begin();
+    }
 
     result.firstRequest = request;
 
@@ -836,24 +1343,36 @@ static double RunMeasureCalibration(const Config& cfg, const std::string& measur
 
 static void RunTest(const Config& cfg, const TestCase& test, int clientCount) {
     std::vector<ClientResult> results(clientCount);
+    MemoryMeasurement memory(cfg.memory_measure, cfg.memory_sample_ms);
     if (clientCount <= 1) {
-        results[0] = RunOneClient(cfg, test, nullptr);
+        results[0] = RunOneClient(cfg, test, nullptr, nullptr, &memory, true);
     } else {
         Barrier barrier(static_cast<unsigned>(clientCount));
+        StartGate startGate(static_cast<unsigned>(clientCount));
         std::vector<std::thread> threads;
         for (int c = 0; c < clientCount; ++c) {
-            threads.emplace_back([&, c] { results[c] = RunOneClient(cfg, test, &barrier); });
+            threads.emplace_back([&, c] {
+                results[c] = RunOneClient(cfg, test, &barrier, &startGate, &memory, false);
+            });
         }
+        startGate.WaitUntilReady();
+        memory.Begin();
+        startGate.Release();
         for (auto& t : threads) t.join();
     }
+    memory.End();
 
     // Aggregate: one round-trip sample per round = max across clients for that round
     // (the round only completes once the slowest client finishes), matching the
     // Python matrix runner's aggregate_results_by_round.
     std::vector<double> aggregated;
     int totalSkipped = 0;
+    int completedClients = 0;
     size_t rounds = cfg.iterations;
-    for (auto& r : results) totalSkipped += r.skipped;
+    for (auto& r : results) {
+        totalSkipped += r.skipped;
+        if (r.skipped == 0) ++completedClients;
+    }
     for (size_t i = 0; i < rounds; ++i) {
         double worst = -1;
         bool any = false;
@@ -905,7 +1424,10 @@ static void RunTest(const Config& cfg, const TestCase& test, int clientCount) {
     out << "\"roundtrip_ms\":{\"min\":" << stats.minMs << ",\"max\":" << stats.maxMs
         << ",\"avg\":" << stats.avgMs << ",\"stddev\":" << stats.stddevMs << "},"
         << "\"samples\":" << stats.samples << ","
-        << "\"skipped\":" << stats.skipped;
+        << "\"skipped\":" << stats.skipped
+        << ",\"expected_clients\":" << clientCount
+        << ",\"completed_clients\":" << completedClients
+        << ",\"memory\":" << memory.ToJson();
 
     if (measureUs >= 0) {
         out << ",\"measure_us\":" << static_cast<long long>(measureUs);
@@ -985,22 +1507,8 @@ int main(int argc, char** argv) {
     }
 
     if (cfg.tier == "multiple") {
-        std::vector<std::pair<std::string, long>> selectedTiers;
-        if (cfg.tiers.empty()) {
-            selectedTiers = kAllTiers;
-        } else {
-            for (const auto& tierName : cfg.tiers) {
-                auto tier = std::find_if(kAllTiers.begin(), kAllTiers.end(),
-                    [&](const auto& candidate) { return candidate.first == tierName; });
-                if (tier == kAllTiers.end()) {
-                    std::cerr << "[es1client] Unknown tier in tiers=: " << tierName << "\n";
-                    return 1;
-                }
-                selectedTiers.push_back(*tier);
-            }
-        }
-        for (const auto& tier : selectedTiers) {
-            auto tierTests = BuildTierTests(tier.first, tier.second);
+        for (auto& t : kAllTiers) {
+            auto tierTests = BuildTierTests(t.first, t.second);
             tests.insert(tests.end(), tierTests.begin(), tierTests.end());
         }
     } else {

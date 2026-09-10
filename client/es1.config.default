@@ -19,10 +19,9 @@ transport=ws
 http_mode=session
 
 # single:   run only the one tier named by 'size' below.
-# multiple: sweep every tier, or only the comma-separated tiers listed below.
+# multiple: sweep every tier (500B, 5KB, 50KB, 150KB, 500KB, 1MB, 4MB).
 tier=multiple
 size=5KB
-tiers=500B,5KB,50KB,150KB,500KB
 
 iterations=20
 warmup=3
@@ -30,13 +29,18 @@ warmup=3
 # One value runs a single client count. A comma-separated list sweeps each
 # one in turn against every test, e.g. "32,8,1" - matching the Python
 # matrix runner's CLIENT_COUNTS sweep, all in this one run.
-clients=1,8,32
+clients=32,8,1
 
 skip_scalars=false
 
 host=127.0.0.1
 port=9998
 timeout_s=30
+
+# Measure WPEFramework RSS automatically through /proc and its discovered
+# cgroup. The PID, cgroup path, baseline, and peak are selected at runtime.
+memory_measure=true
+memory_sample_ms=10
 
 # Only used when mode=coldstart.
 coldstart_poll_ms=100

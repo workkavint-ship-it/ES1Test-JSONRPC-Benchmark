@@ -19,24 +19,29 @@ transport=ws
 http_mode=session
 
 # single:   run only the one tier named by 'size' below.
-# multiple: sweep every tier, or only the comma-separated tiers listed below.
+# multiple: sweep every tier (500B, 5KB, 50KB, 150KB, 500KB, 1MB, 4MB).
 tier=multiple
 size=5KB
-tiers=500B,5KB,50KB,150KB,500KB
 
 iterations=20
-warmup=3
+# Keep zero for a true first-operation cold measurement.
+warmup=0
 
 # One value runs a single client count. A comma-separated list sweeps each
 # one in turn against every test, e.g. "32,8,1" - matching the Python
 # matrix runner's CLIENT_COUNTS sweep, all in this one run.
-clients=1,8,32
+clients=32,8,1
 
 skip_scalars=false
 
 host=127.0.0.1
 port=9998
 timeout_s=30
+
+# Measure the first operation after ES1Benchmark becomes ready. Discovery is
+# runtime-based, so no PID, cgroup path, or baseline is specific to this box.
+memory_measure=true
+memory_sample_ms=10
 
 # How often to retry connecting while waiting for Thunder, and how long to
 # wait in total before giving up and exiting without running anything.
