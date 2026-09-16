@@ -41,6 +41,7 @@ timeout_s=30
 # cgroup. The PID, cgroup path, baseline, and peak are selected at runtime.
 memory_measure=true
 memory_sample_ms=10
+first_round_memory=true
 
 # In addition to stdout, also mirror every JSONL result line to this file.
 # Truncated at startup, so it always holds only the most recent run's

@@ -690,14 +690,6 @@ public:
             cv_.wait(lock, [this, gen] { return aborted_ || gen != generation_; });
         }
     }
-    // Read-only observation of how many full rendezvous episodes have
-    // completed - doesn't change Wait()/Abort() at all, just lets outside
-    // code (the first-round memory recorder) detect when a specific round
-    // has finished without being one of the barrier's own parties.
-    unsigned Generation() {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return generation_;
-    }
 private:
     std::mutex mutex_;
     std::condition_variable cv_;
@@ -1214,93 +1206,6 @@ private:
     bool released_ = false;
 };
 
-// ===========================================================================
-// First-round memory recorder (multi-client tests only)
-//
-// A fully separate, additive component: it does its own independent target
-// discovery and its own /proc reads via the same free functions
-// MemoryMeasurement uses, into its own storage. It never touches anything
-// inside MemoryMeasurement, so that class's baseline/peak/end/average
-// computation is completely unaffected by whether this even runs.
-//
-// MemoryMeasurement only ever keeps rolling aggregates (peak/sum/count),
-// never a full history - this exists purely to capture a genuine
-// fine-grained time series, but only for round 0 (iteration 1) of a
-// multi-client test, not the whole run, since sustaining an array like this
-// for every round would just be a second full-test sampler thread.
-//
-// Only usable where a Barrier exists (clientCount > 1) - single-client
-// tests have no barrier to observe, so there's no rendezvous signal telling
-// this when round 0 has finished.
-// ===========================================================================
-
-class FirstRoundRecorder {
-public:
-    struct Point {
-        int64_t t_ms;   // milliseconds since Start() was called
-        int64_t rss;    // bytes
-        int64_t pss;    // bytes
-    };
-
-    // Spawns a background thread that samples every sampleMs until the
-    // barrier's generation counter reaches gen0 + 2 - the point at which
-    // every client has both entered and finished round 0 (one "round
-    // start" rendezvous plus one "round end" rendezvous, each bumping the
-    // generation by 1). Call this BEFORE releasing the clients from the
-    // start gate, so the recorder is already watching before round 0 begins
-    // and nothing at the very start is missed.
-    void Start(Barrier* barrier, unsigned gen0, int sampleMs) {
-        if (!DiscoverMemoryTarget(&target_, &reason_)) return;
-        available_ = true;
-        start_ = std::chrono::steady_clock::now();
-        thread_ = std::thread([this, barrier, gen0, sampleMs] {
-            while (barrier->Generation() < gen0 + 2) {
-                MemorySample sample = ReadMemorySample(target_);
-                if (sample.valid) {
-                    int64_t elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::steady_clock::now() - start_).count();
-                    points_.push_back({elapsed, sample.rss, sample.pss});
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds(sampleMs));
-            }
-        });
-    }
-
-    // Must be called (and complete) before ToJson() is read, so every write
-    // the background thread ever made to points_ is safely visible here -
-    // the same join-as-synchronization pattern MemoryMeasurement::End() uses.
-    void Join() {
-        if (thread_.joinable()) thread_.join();
-    }
-
-    std::string ToJson() const {
-        std::ostringstream out;
-        out << "{\"available\":" << (available_ ? "true" : "false");
-        if (!available_) {
-            out << ",\"reason\":\"" << JsonEscape(reason_) << "\"}";
-            return out.str();
-        }
-        out << ",\"pid\":" << target_.pid << ",\"sample_count\":" << points_.size()
-            << ",\"samples\":[";
-        for (size_t i = 0; i < points_.size(); ++i) {
-            if (i) out << ",";
-            out << "{\"t_ms\":" << points_[i].t_ms
-                << ",\"rss_mib\":" << MiB(points_[i].rss)
-                << ",\"pss_mib\":" << MiB(points_[i].pss) << "}";
-        }
-        out << "]}";
-        return out.str();
-    }
-
-private:
-    MemoryTarget target_;
-    std::vector<Point> points_;
-    std::thread thread_;
-    std::chrono::steady_clock::time_point start_;
-    bool available_ = false;
-    std::string reason_;
-};
-
 static std::vector<TestCase> BuildTierTests(const std::string& tierLabel, long size) {
     std::vector<TestCase> tests;
 
@@ -1347,8 +1252,8 @@ static std::vector<TestCase> BuildTierTests(const std::string& tierLabel, long s
 
 static std::vector<TestCase> BuildScalarTests() {
     return {
-        {"setint64", "{\"value\":18446744073709551615}", "scalar", 0, false, "", ""},
-        {"getint64", "{}", "scalar", 0, true, "", ""},
+        {"setuint64", "{\"value\":18446744073709551615}", "scalar", 0, false, "", ""},
+        {"getuint64", "{}", "scalar", 0, true, "", ""},
     };
 }
 
@@ -1461,7 +1366,6 @@ static double RunMeasureCalibration(const Config& cfg, const std::string& measur
 static void RunTest(const Config& cfg, const TestCase& test, int clientCount) {
     std::vector<ClientResult> results(clientCount);
     MemoryMeasurement memory(cfg.memory_measure, cfg.memory_sample_ms);
-    FirstRoundRecorder firstRoundRecorder;
     if (clientCount <= 1) {
         results[0] = RunOneClient(cfg, test, nullptr, nullptr, &memory, true);
     } else {
@@ -1475,19 +1379,10 @@ static void RunTest(const Config& cfg, const TestCase& test, int clientCount) {
         }
         startGate.WaitUntilReady();
         memory.Begin();
-        // Snapshot the generation and start the recorder BEFORE releasing
-        // the clients, so it's already watching before round 0 begins.
-        // Gated on memory_measure like the main sampler, so turning that
-        // off disables all memory-related background sampling together.
-        unsigned gen0 = barrier.Generation();
-        if (cfg.memory_measure) {
-            firstRoundRecorder.Start(&barrier, gen0, cfg.memory_sample_ms);
-        }
         startGate.Release();
         for (auto& t : threads) t.join();
     }
     memory.End();
-    firstRoundRecorder.Join();
 
     // Aggregate: one round-trip sample per round = max across clients for that round
     // (the round only completes once the slowest client finishes), matching the
@@ -1554,8 +1449,7 @@ static void RunTest(const Config& cfg, const TestCase& test, int clientCount) {
         << "\"skipped\":" << stats.skipped
         << ",\"expected_clients\":" << clientCount
         << ",\"completed_clients\":" << completedClients
-        << ",\"memory\":" << memory.ToJson()
-        << ",\"first_round_memory\":" << firstRoundRecorder.ToJson();
+        << ",\"memory\":" << memory.ToJson();
 
     if (measureUs >= 0) {
         out << ",\"measure_us\":" << static_cast<long long>(measureUs);
@@ -1570,7 +1464,7 @@ static void RunTest(const Config& cfg, const TestCase& test, int clientCount) {
 // ===========================================================================
 
 static bool IsBenchmarkReady(const Config& cfg) {
-    std::string request = BuildRequest("getint64", "{}");
+    std::string request = BuildRequest("getuint64", "{}");
     std::string response;
 
     if (cfg.transport == "ws") {
