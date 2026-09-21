@@ -20,16 +20,27 @@
 # classes, so it builds independently of the plugin target above it.
 
 add_executable(es1client es1client.cpp)
+add_executable(JsonRpcLoadClient JsonRpcLoadClient.cpp)
 
 set_target_properties(es1client PROPERTIES
     CXX_STANDARD 14
     CXX_STANDARD_REQUIRED YES
 )
 
+set_target_properties(JsonRpcLoadClient PROPERTIES
+    CXX_STANDARD 14
+    CXX_STANDARD_REQUIRED YES
+)
+
 find_package(Threads REQUIRED)
 target_link_libraries(es1client PRIVATE Threads::Threads)
+target_link_libraries(JsonRpcLoadClient PRIVATE Threads::Threads)
 
 install(TARGETS es1client
+    DESTINATION ${CMAKE_INSTALL_PREFIX}/bin
+)
+
+install(TARGETS JsonRpcLoadClient
     DESTINATION ${CMAKE_INSTALL_PREFIX}/bin
 )
 

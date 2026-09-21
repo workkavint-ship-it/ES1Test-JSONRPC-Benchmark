@@ -1,0 +1,27 @@
+# Separate configurable load client configuration.
+mode=warm
+transport=ws
+http_mode=session
+
+# scalar, tier, or both
+test_scope=scalar
+# set, get, or both
+operation=both
+
+# single or multiple
+tier=single
+size=5KB
+
+clients=100
+iterations=10
+warmup=0
+
+host=127.0.0.1
+port=9998
+timeout_s=30
+
+memory_measure=true
+memory_sample_ms=10
+
+result_file_enabled=true
+result_file=/opt/JsonRpcLoadClient-result.jsonl
