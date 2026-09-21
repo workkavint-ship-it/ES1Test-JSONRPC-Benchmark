@@ -48,6 +48,8 @@ struct Config {
     int timeoutS = 30;
     int memorySampleMs = 10;
     bool memoryMeasure = true;
+    bool logRequestResponse = true;
+    int logMaxBytes = 16384;
     bool resultFileEnabled = true;
     std::string resultFile = "/opt/JsonRpcLoadClient-result.jsonl";
 };
@@ -101,6 +103,8 @@ static bool LoadConfig(const std::string& path, Config* config) {
         else if (key == "timeout_s") config->timeoutS = std::stoi(value);
         else if (key == "memory_measure") config->memoryMeasure = IsTrue(value);
         else if (key == "memory_sample_ms") config->memorySampleMs = std::max(1, std::stoi(value));
+        else if (key == "log_request_response") config->logRequestResponse = IsTrue(value);
+        else if (key == "log_max_bytes") config->logMaxBytes = std::max(0, std::stoi(value));
         else if (key == "result_file_enabled") config->resultFileEnabled = IsTrue(value);
         else if (key == "result_file") config->resultFile = value;
     }
@@ -122,6 +126,59 @@ static std::string JsonEscape(const std::string& value) {
         escaped += character;
     }
     return escaped;
+}
+
+static std::string PrettyJson(const std::string& value) {
+    std::ostringstream output;
+    int indent = 0;
+    bool inString = false;
+    bool escaped = false;
+    for (char character : value) {
+        if (inString) {
+            output << character;
+            if (escaped) escaped = false;
+            else if (character == '\\') escaped = true;
+            else if (character == '"') inString = false;
+            continue;
+        }
+        if (character == '"') {
+            inString = true;
+            output << character;
+        } else if (character == '{' || character == '[') {
+            output << character << '\n';
+            ++indent;
+            output << std::string(static_cast<size_t>(indent) * 2, ' ');
+        } else if (character == '}' || character == ']') {
+            output << '\n';
+            indent = std::max(0, indent - 1);
+            output << std::string(static_cast<size_t>(indent) * 2, ' ') << character;
+        } else if (character == ',') {
+            output << character << '\n'
+                   << std::string(static_cast<size_t>(indent) * 2, ' ');
+        } else if (character == ':') {
+            output << ": ";
+        } else if (!std::isspace(static_cast<unsigned char>(character))) {
+            output << character;
+        }
+    }
+    return output.str();
+}
+
+static std::string LimitLogText(const std::string& value, int maxBytes) {
+    if (maxBytes <= 0 || static_cast<int>(value.size()) <= maxBytes) return value;
+    return value.substr(0, static_cast<size_t>(maxBytes))
+        + "\n... [truncated; increase log_max_bytes to print more]";
+}
+
+static void LogSampleExchange(const Config& config, const TestCase& test,
+                              const std::string& request, const std::string& response) {
+    if (!config.logRequestResponse) return;
+    std::cerr << "[JsonRpcLoadClient] sample exchange method=" << test.method
+              << " tier=" << test.tier << " clients=" << config.clients << "\n"
+              << "REQUEST (one representative client):\n"
+              << LimitLogText(PrettyJson(request), config.logMaxBytes) << "\n"
+              << "RESPONSE (one representative client):\n"
+              << LimitLogText(PrettyJson(response), config.logMaxBytes) << "\n";
 }
 
 static void Emit(const std::string& line) {
@@ -521,6 +578,9 @@ static RunStats RunTest(const Config& config, const TestCase& test) {
     std::atomic<int> baseline{ReadWpeRssKb()};
     std::atomic<int> peak{baseline.load()};
     std::atomic<bool> running{true};
+    std::mutex sampleMutex;
+    std::string sampleRequest;
+    std::string sampleResponse;
     std::thread sampler;
     if (config.memoryMeasure) {
         sampler = std::thread([&] {
@@ -546,6 +606,10 @@ static RunStats RunTest(const Config& config, const TestCase& test) {
             http.reset(new HttpClient(config));
         }
         const std::string request = BuildRequest(test);
+        {
+            std::lock_guard<std::mutex> lock(sampleMutex);
+            if (sampleRequest.empty()) sampleRequest = request;
+        }
         auto call = [&](std::string* response) {
             error.clear();
             return ws ? ws->Call(request, response, &error) : http->Call(request, response, &error);
@@ -553,12 +617,20 @@ static RunStats RunTest(const Config& config, const TestCase& test) {
         for (int warmup = 0; warmup < config.warmup; ++warmup) {
             std::string response;
             call(&response);
+            if (!response.empty()) {
+                std::lock_guard<std::mutex> lock(sampleMutex);
+                if (sampleResponse.empty()) sampleResponse = response;
+            }
         }
         for (int iteration = 0; iteration < config.iterations; ++iteration) {
             const auto start = std::chrono::steady_clock::now();
             std::string response;
             const bool ok = call(&response) && IsSuccess(response);
             const auto end = std::chrono::steady_clock::now();
+            if (!response.empty()) {
+                std::lock_guard<std::mutex> lock(sampleMutex);
+                if (sampleResponse.empty()) sampleResponse = response;
+            }
             if (!ok) {
                 ++failed;
             } else {
@@ -574,6 +646,7 @@ static RunStats RunTest(const Config& config, const TestCase& test) {
     for (auto& thread : clients) thread.join();
     running = false;
     if (sampler.joinable()) sampler.join();
+    LogSampleExchange(config, test, sampleRequest, sampleResponse);
     RunStats stats;
     stats.success = success.load();
     stats.failed = failed.load();
