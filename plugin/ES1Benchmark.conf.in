@@ -9,7 +9,7 @@ autostart = "@PLUGIN_ES1BENCHMARK_AUTOSTART@"
 configuration = {
     "root": {
         "mode": "@PLUGIN_ES1BENCHMARK_MODE@",
-        "locator": "lib@PLUGIN_ES1BENCHMARK_IMPLEMENTATION@.so"
+        "locator": "lib@PLUGIN_IMPLEMENTATION@.so"
     },
     "notifyhost":  "10.0.0.154",
     "notifyport":  8080,
