@@ -7,6 +7,9 @@ autostart = "@PLUGIN_ES1BENCHMARK_AUTOSTART@"
 # the Python server probes each in order and uses the first one that responds,
 # so this survives the device's IP changing between test runs.
 configuration = {
+    "root": {
+        "mode": "@PLUGIN_ES1BENCHMARK_MODE@"
+    },
     "notifyhost":  "10.0.0.154",
     "notifyport":  8080,
     "thunderhost": "10.0.0.8,10.0.0.202",
