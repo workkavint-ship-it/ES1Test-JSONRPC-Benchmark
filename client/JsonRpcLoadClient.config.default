@@ -24,6 +24,8 @@ memory_measure=true
 memory_sample_ms=10
 log_request_response=true
 log_max_bytes=16384
+output_format=pretty
+progress_output=true
 
 result_file_enabled=true
 result_file=/opt/JsonRpcLoadClient-result.jsonl

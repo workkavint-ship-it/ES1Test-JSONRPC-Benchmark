@@ -17,6 +17,7 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -50,6 +51,8 @@ struct Config {
     bool memoryMeasure = true;
     bool logRequestResponse = true;
     int logMaxBytes = 16384;
+    std::string outputFormat = "pretty";
+    bool progressOutput = true;
     bool resultFileEnabled = true;
     std::string resultFile = "/opt/JsonRpcLoadClient-result.jsonl";
 };
@@ -105,6 +108,8 @@ static bool LoadConfig(const std::string& path, Config* config) {
         else if (key == "memory_sample_ms") config->memorySampleMs = std::max(1, std::stoi(value));
         else if (key == "log_request_response") config->logRequestResponse = IsTrue(value);
         else if (key == "log_max_bytes") config->logMaxBytes = std::max(0, std::stoi(value));
+        else if (key == "output_format") config->outputFormat = value;
+        else if (key == "progress_output") config->progressOutput = IsTrue(value);
         else if (key == "result_file_enabled") config->resultFileEnabled = IsTrue(value);
         else if (key == "result_file") config->resultFile = value;
     }
@@ -181,13 +186,18 @@ static void LogSampleExchange(const Config& config, const TestCase& test,
               << LimitLogText(PrettyJson(response), config.logMaxBytes) << "\n";
 }
 
-static void Emit(const std::string& line) {
+static void EmitJson(const std::string& line, bool printStdout) {
     std::lock_guard<std::mutex> lock(outputMutex);
-    std::cout << line << std::endl;
+    if (printStdout) std::cout << line << std::endl;
     if (resultFile.is_open()) {
         resultFile << line << std::endl;
         resultFile.flush();
     }
+}
+
+static void PrintProgress(const std::string& line) {
+    std::lock_guard<std::mutex> lock(outputMutex);
+    std::cout << line << std::endl;
 }
 
 static int ConnectTcp(const Config& config, std::string* error) {
@@ -560,6 +570,30 @@ static int ReadWpeRssKb() {
     return result;
 }
 
+class ReusableBarrier {
+public:
+    explicit ReusableBarrier(size_t participants) : participants_(participants) {}
+
+    void Wait() {
+        std::unique_lock<std::mutex> lock(mutex_);
+        const size_t generation = generation_;
+        if (++arrived_ == participants_) {
+            arrived_ = 0;
+            ++generation_;
+            condition_.notify_all();
+            return;
+        }
+        condition_.wait(lock, [this, generation] { return generation_ != generation; });
+    }
+
+private:
+    const size_t participants_;
+    size_t arrived_ = 0;
+    size_t generation_ = 0;
+    std::mutex mutex_;
+    std::condition_variable condition_;
+};
+
 struct RunStats {
     int success = 0;
     int failed = 0;
@@ -568,16 +602,23 @@ struct RunStats {
     double averageMs = 0;
     int baselineRssKb = -1;
     int peakRssKb = -1;
+    std::vector<int> roundSuccess;
+    std::vector<int> roundFailed;
 };
 
 static RunStats RunTest(const Config& config, const TestCase& test) {
     std::vector<double> latencies;
     std::mutex statsMutex;
+    std::mutex roundMutex;
     std::atomic<int> success{0};
     std::atomic<int> failed{0};
     std::atomic<int> baseline{ReadWpeRssKb()};
     std::atomic<int> peak{baseline.load()};
     std::atomic<bool> running{true};
+    ReusableBarrier startBarrier(static_cast<size_t>(config.clients) + 1);
+    ReusableBarrier doneBarrier(static_cast<size_t>(config.clients) + 1);
+    std::vector<int> roundSuccess(static_cast<size_t>(config.iterations), 0);
+    std::vector<int> roundFailed(static_cast<size_t>(config.iterations), 0);
     std::mutex sampleMutex;
     std::string sampleRequest;
     std::string sampleResponse;
@@ -596,11 +637,11 @@ static RunStats RunTest(const Config& config, const TestCase& test) {
         std::unique_ptr<WsClient> ws;
         std::unique_ptr<HttpClient> http;
         std::string error;
+        bool connectionReady = true;
         if (config.transport == "ws") {
             ws.reset(new WsClient(config));
             if (!ws->Open(&error)) {
-                failed.fetch_add(config.iterations);
-                return;
+                connectionReady = false;
             }
         } else {
             http.reset(new HttpClient(config));
@@ -616,16 +657,17 @@ static RunStats RunTest(const Config& config, const TestCase& test) {
         };
         for (int warmup = 0; warmup < config.warmup; ++warmup) {
             std::string response;
-            call(&response);
+            if (connectionReady) call(&response);
             if (!response.empty()) {
                 std::lock_guard<std::mutex> lock(sampleMutex);
                 if (sampleResponse.empty()) sampleResponse = response;
             }
         }
         for (int iteration = 0; iteration < config.iterations; ++iteration) {
+            startBarrier.Wait();
             const auto start = std::chrono::steady_clock::now();
             std::string response;
-            const bool ok = call(&response) && IsSuccess(response);
+            const bool ok = connectionReady && call(&response) && IsSuccess(response);
             const auto end = std::chrono::steady_clock::now();
             if (!response.empty()) {
                 std::lock_guard<std::mutex> lock(sampleMutex);
@@ -633,16 +675,40 @@ static RunStats RunTest(const Config& config, const TestCase& test) {
             }
             if (!ok) {
                 ++failed;
+                std::lock_guard<std::mutex> roundLock(roundMutex);
+                ++roundFailed[static_cast<size_t>(iteration)];
             } else {
                 ++success;
-                std::lock_guard<std::mutex> lock(statsMutex);
+                std::lock_guard<std::mutex> roundLock(roundMutex);
+                ++roundSuccess[static_cast<size_t>(iteration)];
+                std::lock_guard<std::mutex> statsLock(statsMutex);
                 latencies.push_back(std::chrono::duration<double, std::milli>(end - start).count());
             }
+            doneBarrier.Wait();
         }
     };
     std::vector<std::thread> clients;
     clients.reserve(static_cast<size_t>(config.clients));
     for (int index = 0; index < config.clients; ++index) clients.emplace_back(client);
+    for (int iteration = 0; iteration < config.iterations; ++iteration) {
+        if (config.progressOutput) {
+            std::ostringstream line;
+            line << "Iteration " << (iteration + 1) << "/" << config.iterations
+                 << ": sending " << config.clients << " clients in parallel...";
+            PrintProgress(line.str());
+        }
+        startBarrier.Wait();
+        doneBarrier.Wait();
+        if (config.progressOutput) {
+            std::lock_guard<std::mutex> lock(roundMutex);
+            std::ostringstream line;
+            line << "Iteration " << (iteration + 1) << "/" << config.iterations
+                 << ": received all responses | successful="
+                 << roundSuccess[static_cast<size_t>(iteration)]
+                 << " failed=" << roundFailed[static_cast<size_t>(iteration)];
+            PrintProgress(line.str());
+        }
+    }
     for (auto& thread : clients) thread.join();
     running = false;
     if (sampler.joinable()) sampler.join();
@@ -652,6 +718,8 @@ static RunStats RunTest(const Config& config, const TestCase& test) {
     stats.failed = failed.load();
     stats.baselineRssKb = baseline.load();
     stats.peakRssKb = peak.load();
+    stats.roundSuccess = std::move(roundSuccess);
+    stats.roundFailed = std::move(roundFailed);
     if (!latencies.empty()) {
         stats.minMs = *std::min_element(latencies.begin(), latencies.end());
         stats.maxMs = *std::max_element(latencies.begin(), latencies.end());
@@ -661,6 +729,42 @@ static RunStats RunTest(const Config& config, const TestCase& test) {
     }
     return stats;
 }
+
+    static void PrintPrettySummary(const Config& config, const TestCase& test,
+                       const RunStats& stats) {
+        const int expected = config.clients * config.iterations;
+        std::ostringstream output;
+        output << "\nTest complete\n"
+            << "============\n"
+            << "Transport:            " << config.transport;
+        if (config.transport == "http") output << " (" << config.httpMode << ")";
+        output << "\nMethod:               " << test.method
+            << "\nTier:                 " << test.tier
+            << "\nClients:              " << config.clients << " concurrent"
+            << "\nIterations/client:    " << config.iterations
+            << "\nWarmup/client:        " << config.warmup
+            << "\nExpected requests:    " << expected
+            << "\nSuccessful requests:  " << stats.success
+            << "\nFailed requests:      " << stats.failed
+            << "\n\nRound-trip timing\n"
+            << "-----------------\n"
+            << std::fixed << std::setprecision(5)
+            << "Minimum:              " << stats.minMs << " ms\n"
+            << "Maximum:              " << stats.maxMs << " ms\n"
+            << "Average:              " << stats.averageMs << " ms\n"
+            << "\nMemory\n"
+            << "------\n"
+            << "RSS baseline:         ";
+        if (stats.baselineRssKb < 0) output << "unavailable\n";
+        else output << (stats.baselineRssKb / 1024.0) << " MiB\n";
+        output << "RSS peak:             ";
+        if (stats.peakRssKb < 0) output << "unavailable\n";
+        else output << (stats.peakRssKb / 1024.0) << " MiB\n";
+        output << "RSS peak delta:       ";
+        if (stats.baselineRssKb < 0 || stats.peakRssKb < 0) output << "unavailable\n";
+        else output << ((stats.peakRssKb - stats.baselineRssKb) / 1024.0) << " MiB\n";
+        PrintProgress(output.str());
+    }
 
 int main(int argc, char** argv) {
     const std::string path = argc > 1 ? argv[1] : "/opt/JsonRpcLoadClient.config";
@@ -676,6 +780,9 @@ int main(int argc, char** argv) {
         return 1;
     }
     for (const TestCase& test : tests) {
+        if (config.progressOutput) {
+            PrintProgress("\nStarting test: " + test.method + " (" + test.tier + ")");
+        }
         const RunStats stats = RunTest(config, test);
         const int expected = config.clients * config.iterations;
         std::ostringstream output;
@@ -693,7 +800,11 @@ int main(int argc, char** argv) {
                << ",\"rss_peak_delta_mib\":"
                << (stats.baselineRssKb < 0 || stats.peakRssKb < 0 ? "null" : std::to_string((stats.peakRssKb - stats.baselineRssKb) / 1024.0))
                << "}";
-        Emit(output.str());
+        const bool printJson = config.outputFormat == "json" || config.outputFormat == "both";
+        if (config.outputFormat == "pretty" || config.outputFormat == "both") {
+            PrintPrettySummary(config, test, stats);
+        }
+        EmitJson(output.str(), printJson);
     }
     return 0;
 }
