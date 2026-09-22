@@ -767,6 +767,7 @@ static RunStats RunTest(const Config& config, const TestCase& test) {
     }
 
 int main(int argc, char** argv) {
+    const auto commandStart = std::chrono::steady_clock::now();
     const std::string path = argc > 1 ? argv[1] : "/opt/JsonRpcLoadClient.config";
     Config config;
     if (!LoadConfig(path, &config)) {
@@ -806,5 +807,21 @@ int main(int argc, char** argv) {
         }
         EmitJson(output.str(), printJson);
     }
+
+    const double totalDurationMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - commandStart).count();
+    if (config.progressOutput) {
+        std::ostringstream output;
+        output << "\nJsonRpcLoadClient run complete\n"
+               << "============================\n"
+               << std::fixed << std::setprecision(3)
+               << "Total command duration: " << totalDurationMs << " ms ("
+               << (totalDurationMs / 1000.0) << " s)\n";
+        PrintProgress(output.str());
+    }
+    std::ostringstream completion;
+    completion << "{\"event\":\"run_complete\",\"total_duration_ms\":"
+               << std::fixed << std::setprecision(3) << totalDurationMs << "}";
+    EmitJson(completion.str(), config.outputFormat == "json" || config.outputFormat == "both");
     return 0;
 }
