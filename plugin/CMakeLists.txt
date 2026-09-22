@@ -21,7 +21,7 @@ set(PLUGIN_IMPLEMENTATION ${MODULE_NAME}Implementation)
 
 set(PLUGIN_ES1BENCHMARK_AUTOSTART "true" CACHE STRING "Automatically start ES1Benchmark plugin")
 set(PLUGIN_ES1BENCHMARK_STARTUPORDER "" CACHE STRING "Start-up order for ES1Benchmark plugin")
-set(PLUGIN_ES1BENCHMARK_MODE "Off" CACHE STRING "Controls if the plugin runs in-process (Off) or out-of-process (Local)")
+set(PLUGIN_ES1BENCHMARK_MODE "Local" CACHE STRING "Controls if the plugin runs in-process (Off) or out-of-process (Local)")
 
 find_package(${NAMESPACE}Plugins REQUIRED)
 find_package(${NAMESPACE}Definitions REQUIRED)
