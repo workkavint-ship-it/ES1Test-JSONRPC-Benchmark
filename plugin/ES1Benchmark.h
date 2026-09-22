@@ -22,6 +22,7 @@
 #include "Module.h"
 #include <interfaces/IES1Benchmark.h>
 #include <interfaces/json/JES1Benchmark.h>
+#include <atomic>
 
 namespace WPEFramework {
 namespace Plugin {
@@ -45,16 +46,19 @@ namespace Plugin {
                 , NotifyPort(8080)          // Port of the Python coldstart server
                 , ThunderHost("127.0.0.1") // IP of this device (sent to Python so it can connect back)
                 , ThunderPort(55555)        // Thunder JSON-RPC port on this device
+                , LogRequests(false)
             {
                 Add(_T("notifyhost"),  &NotifyHost);
                 Add(_T("notifyport"),  &NotifyPort);
                 Add(_T("thunderhost"), &ThunderHost);
                 Add(_T("thunderport"), &ThunderPort);
+                Add(_T("logrequests"), &LogRequests);
             }
             Core::JSON::String  NotifyHost;
             Core::JSON::DecUInt16 NotifyPort;
             Core::JSON::String  ThunderHost;
             Core::JSON::DecUInt16 ThunderPort;
+            Core::JSON::Boolean LogRequests;
         };
 
         BEGIN_INTERFACE_MAP(ES1Benchmark)
@@ -100,6 +104,12 @@ namespace Plugin {
         uint32_t MeasureStringResizeCost(const uint32_t size, uint64_t& us) override;
         uint32_t MeasureMixedAssignCost(const uint32_t count, uint64_t& us) override;
         uint32_t MeasureNestedAssignCost(const uint32_t count, uint64_t& us) override;
+
+    private:
+        void LogRequest(const char* method, uint64_t amount) const;
+        void LogResponse(const char* method, uint32_t result) const;
+
+        std::atomic<bool> _logRequests { false };
     };
 
 } // namespace Plugin
