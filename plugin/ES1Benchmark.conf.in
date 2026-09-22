@@ -10,6 +10,5 @@ configuration = {
     "notifyhost":  "10.0.0.154",
     "notifyport":  8080,
     "thunderhost": "10.0.0.8,10.0.0.202",
-    "thunderport": 9998,
-    "logrequests": false
+    "thunderport": 9998
 }

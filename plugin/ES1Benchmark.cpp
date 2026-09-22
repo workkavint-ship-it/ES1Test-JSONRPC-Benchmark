@@ -115,7 +115,6 @@ namespace Plugin {
         // Read configuration from plugin JSON (e.g. /etc/WPEFramework/plugins/ES1Benchmark.json)
         Config config;
         config.FromString(service->ConfigLine());
-        _logRequests = config.LogRequests.Value();
 
         const string notifyHost  = config.NotifyHost.Value();
         const uint16_t notifyPort  = config.NotifyPort.Value();
@@ -163,21 +162,6 @@ namespace Plugin {
         Exchange::JES1Benchmark::Unregister(*this);
     }
 
-    void ES1Benchmark::LogRequest(const char* method, uint64_t amount) const
-    {
-        if (_logRequests.load()) {
-            SYSLOG(Logging::Notification, (_T("ES1Benchmark request received: %s amount=%llu"),
-                method, static_cast<unsigned long long>(amount)));
-        }
-    }
-
-    void ES1Benchmark::LogResponse(const char* method, uint32_t result) const
-    {
-        if (_logRequests.load()) {
-            SYSLOG(Logging::Notification, (_T("ES1Benchmark response sent: %s result=%u"), method, result));
-        }
-    }
-
     string ES1Benchmark::Information() const
     {
         return string("ES1 JSON-RPC round-trip benchmark echo plugin");
@@ -187,76 +171,49 @@ namespace Plugin {
     // being measured. Nothing is stored, so concurrent Set* calls from different
     // clients never interfere with each other.
 
-    uint32_t ES1Benchmark::SetString(const string& value)
+    uint32_t ES1Benchmark::SetString(const string& /* value */)
     {
-        LogRequest("setstring", value.length());
-        const uint32_t result = Core::ERROR_NONE;
-        LogResponse("setstring", result);
-        return result;
+        return Core::ERROR_NONE;
     }
 
-    uint32_t ES1Benchmark::SetArray(const std::vector<uint8_t>& value)
+    uint32_t ES1Benchmark::SetArray(const std::vector<uint8_t>& /* value */)
     {
-        LogRequest("setarray", value.size());
-        const uint32_t result = Core::ERROR_NONE;
-        LogResponse("setarray", result);
-        return result;
+        return Core::ERROR_NONE;
     }
 
-    uint32_t ES1Benchmark::SetMixedArray(const std::vector<Exchange::IES1Benchmark::MixedElement>& value)
+    uint32_t ES1Benchmark::SetMixedArray(const std::vector<Exchange::IES1Benchmark::MixedElement>& /* value */)
     {
-        LogRequest("setmixedarray", value.size());
-        const uint32_t result = Core::ERROR_NONE;
-        LogResponse("setmixedarray", result);
-        return result;
+        return Core::ERROR_NONE;
     }
 
-    uint32_t ES1Benchmark::SetNestedObjects(const std::vector<Exchange::IES1Benchmark::NestedObject>& value)
+    uint32_t ES1Benchmark::SetNestedObjects(const std::vector<Exchange::IES1Benchmark::NestedObject>& /* value */)
     {
-        LogRequest("setnestedobjects", value.size());
-        const uint32_t result = Core::ERROR_NONE;
-        LogResponse("setnestedobjects", result);
-        return result;
+        return Core::ERROR_NONE;
     }
 
-    uint32_t ES1Benchmark::SetUint32(const uint32_t value)
+    uint32_t ES1Benchmark::SetUint32(const uint32_t /* value */)
     {
-        LogRequest("setuint32", value);
-        const uint32_t result = Core::ERROR_NONE;
-        LogResponse("setuint32", result);
-        return result;
+        return Core::ERROR_NONE;
     }
 
-    uint32_t ES1Benchmark::SetUint64(const uint64_t value)
+    uint32_t ES1Benchmark::SetUint64(const uint64_t /* value */)
     {
-        LogRequest("setuint64", value);
-        const uint32_t result = Core::ERROR_NONE;
-        LogResponse("setuint64", result);
-        return result;
+        return Core::ERROR_NONE;
     }
 
-    uint32_t ES1Benchmark::SetBool(const bool value)
+    uint32_t ES1Benchmark::SetBool(const bool /* value */)
     {
-        LogRequest("setbool", value ? 1 : 0);
-        const uint32_t result = Core::ERROR_NONE;
-        LogResponse("setbool", result);
-        return result;
+        return Core::ERROR_NONE;
     }
 
-    uint32_t ES1Benchmark::SetFloat(const float value)
+    uint32_t ES1Benchmark::SetFloat(const float /* value */)
     {
-        LogRequest("setfloat", static_cast<uint64_t>(value));
-        const uint32_t result = Core::ERROR_NONE;
-        LogResponse("setfloat", result);
-        return result;
+        return Core::ERROR_NONE;
     }
 
-    uint32_t ES1Benchmark::SetDouble(const double value)
+    uint32_t ES1Benchmark::SetDouble(const double /* value */)
     {
-        LogRequest("setdouble", static_cast<uint64_t>(value));
-        const uint32_t result = Core::ERROR_NONE;
-        LogResponse("setdouble", result);
-        return result;
+        return Core::ERROR_NONE;
     }
 
     // Get* handlers: populate the output from pre-built static data. 'size'/'count'
@@ -265,85 +222,58 @@ namespace Plugin {
 
     uint32_t ES1Benchmark::GetString(const uint32_t size, string& value)
     {
-        LogRequest("getstring", size);
         value.resize(size);
         std::memcpy(&value[0], s_staticCharBuffer.data(), size);
-        const uint32_t result = Core::ERROR_NONE;
-        LogResponse("getstring", result);
-        return result;
+        return Core::ERROR_NONE;
     }
 
     uint32_t ES1Benchmark::GetArray(const uint32_t size, std::vector<uint8_t>& value)
     {
-        LogRequest("getarray", size);
         value.resize(size);
         std::memcpy(value.data(), s_staticByteBuffer.data(), size);
-        const uint32_t result = Core::ERROR_NONE;
-        LogResponse("getarray", result);
-        return result;
+        return Core::ERROR_NONE;
     }
 
     uint32_t ES1Benchmark::GetMixedArray(const uint32_t count, std::vector<Exchange::IES1Benchmark::MixedElement>& value)
     {
-        LogRequest("getmixedarray", count);
         value.assign(s_staticMixedVec.begin(), s_staticMixedVec.begin() + count);
-        const uint32_t result = Core::ERROR_NONE;
-        LogResponse("getmixedarray", result);
-        return result;
+        return Core::ERROR_NONE;
     }
 
     uint32_t ES1Benchmark::GetNestedObjects(const uint32_t count, std::vector<Exchange::IES1Benchmark::NestedObject>& value)
     {
-        LogRequest("getnestedobjects", count);
         value.assign(s_staticNestedVec.begin(), s_staticNestedVec.begin() + count);
-        const uint32_t result = Core::ERROR_NONE;
-        LogResponse("getnestedobjects", result);
-        return result;
+        return Core::ERROR_NONE;
     }
 
     uint32_t ES1Benchmark::GetUint32(uint32_t& value)
     {
-        LogRequest("getuint32", sizeof(value));
         std::memcpy(&value, &s_staticUint32, sizeof(value));
-        const uint32_t result = Core::ERROR_NONE;
-        LogResponse("getuint32", result);
-        return result;
+        return Core::ERROR_NONE;
     }
 
     uint32_t ES1Benchmark::GetUint64(uint64_t& value)
     {
-        LogRequest("getuint64", sizeof(value));
         std::memcpy(&value, &s_staticUint64, sizeof(value));
-        const uint32_t result = Core::ERROR_NONE;
-        LogResponse("getuint64", result);
-        return result;
+        return Core::ERROR_NONE;
     }
 
     uint32_t ES1Benchmark::GetBool(bool& value)
     {
-        LogRequest("getbool", sizeof(value));
         std::memcpy(&value, &s_staticBool, sizeof(value));
-        const uint32_t result = Core::ERROR_NONE;
-        LogResponse("getbool", result);
-        return result;
+        return Core::ERROR_NONE;
     }
 
     uint32_t ES1Benchmark::GetFloat(float& value)
     {
-        LogRequest("getfloat", sizeof(value));
         std::memcpy(&value, &s_staticFloat, sizeof(value));
-        const uint32_t result = Core::ERROR_NONE;
-        LogResponse("getfloat", result);
-        return result;
+        return Core::ERROR_NONE;
     }
 
     uint32_t ES1Benchmark::GetDouble(double& value)
     {
-        LogRequest("getdouble", sizeof(value));
         std::memcpy(&value, &s_staticDouble, sizeof(value));
-        const uint32_t result = Core::ERROR_NONE;
-        LogResponse("getdouble", result);
-        return result;
+        return Core::ERROR_NONE;
     }
 
     // Calibration only - mirrors GetArray exactly: resize() is included in the
@@ -351,7 +281,6 @@ namespace Plugin {
     // memcpy'd into (same reasoning as MeasureStringResizeCost/GetString).
     uint32_t ES1Benchmark::MeasureCopyCost(const uint32_t size, uint64_t& us)
     {
-        LogRequest("measurecopycost", size);
         std::vector<uint8_t> dst;
 
         auto t0 = std::chrono::steady_clock::now();
@@ -360,9 +289,7 @@ namespace Plugin {
         auto t1 = std::chrono::steady_clock::now();
 
         us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
-        const uint32_t result = Core::ERROR_NONE;
-        LogResponse("measurecopycost", result);
-        return result;
+        return Core::ERROR_NONE;
     }
 
     // Calibration only - mirrors GetString exactly: resize() is included in the
@@ -371,7 +298,6 @@ namespace Plugin {
     // std::vector<uint8_t> instead of the old raw-array @length mechanism).
     uint32_t ES1Benchmark::MeasureStringResizeCost(const uint32_t size, uint64_t& us)
     {
-        LogRequest("measurestringresizecost", size);
         string dst;
 
         auto t0 = std::chrono::steady_clock::now();
@@ -380,9 +306,7 @@ namespace Plugin {
         auto t1 = std::chrono::steady_clock::now();
 
         us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
-        const uint32_t result = Core::ERROR_NONE;
-        LogResponse("measurestringresizecost", result);
-        return result;
+        return Core::ERROR_NONE;
     }
 
     // Calibration only - mirrors exactly what GetMixedArray does internally (assign
@@ -390,7 +314,6 @@ namespace Plugin {
     // faithful stand-in for that handler's real cost, not just a similar-looking one.
     uint32_t ES1Benchmark::MeasureMixedAssignCost(const uint32_t count, uint64_t& us)
     {
-        LogRequest("measuremixedassigncost", count);
         std::vector<Exchange::IES1Benchmark::MixedElement> dst;
 
         auto t0 = std::chrono::steady_clock::now();
@@ -398,15 +321,12 @@ namespace Plugin {
         auto t1 = std::chrono::steady_clock::now();
 
         us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
-        const uint32_t result = Core::ERROR_NONE;
-        LogResponse("measuremixedassigncost", result);
-        return result;
+        return Core::ERROR_NONE;
     }
 
     // Calibration only - mirrors GetNestedObjects the same way.
     uint32_t ES1Benchmark::MeasureNestedAssignCost(const uint32_t count, uint64_t& us)
     {
-        LogRequest("measurenestedassigncost", count);
         std::vector<Exchange::IES1Benchmark::NestedObject> dst;
 
         auto t0 = std::chrono::steady_clock::now();
@@ -414,9 +334,7 @@ namespace Plugin {
         auto t1 = std::chrono::steady_clock::now();
 
         us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
-        const uint32_t result = Core::ERROR_NONE;
-        LogResponse("measurenestedassigncost", result);
-        return result;
+        return Core::ERROR_NONE;
     }
 
 } // namespace Plugin
