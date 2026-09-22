@@ -17,6 +17,7 @@
 
 set(PLUGIN_NAME ES1Benchmark)
 set(MODULE_NAME ${NAMESPACE}${PLUGIN_NAME})
+set(PLUGIN_IMPLEMENTATION ${MODULE_NAME}Implementation)
 
 set(PLUGIN_ES1BENCHMARK_AUTOSTART "true" CACHE STRING "Automatically start ES1Benchmark plugin")
 set(PLUGIN_ES1BENCHMARK_STARTUPORDER "" CACHE STRING "Start-up order for ES1Benchmark plugin")
@@ -48,6 +49,27 @@ target_link_libraries(${MODULE_NAME}
 )
 
 install(TARGETS ${MODULE_NAME}
+    DESTINATION ${CMAKE_INSTALL_PREFIX}/lib/${STORAGE_DIRECTORY}/plugins
+)
+
+add_library(${PLUGIN_IMPLEMENTATION} SHARED
+    Module.cpp
+    ES1BenchmarkImplementation.cpp
+)
+
+set_target_properties(${PLUGIN_IMPLEMENTATION} PROPERTIES
+    CXX_STANDARD 14
+    CXX_STANDARD_REQUIRED YES
+)
+
+target_link_libraries(${PLUGIN_IMPLEMENTATION}
+    PRIVATE
+        CompileSettingsDebug::CompileSettingsDebug
+        ${NAMESPACE}Plugins::${NAMESPACE}Plugins
+        ${NAMESPACE}Definitions::${NAMESPACE}Definitions
+)
+
+install(TARGETS ${PLUGIN_IMPLEMENTATION}
     DESTINATION ${CMAKE_INSTALL_PREFIX}/lib/${STORAGE_DIRECTORY}/plugins
 )
 

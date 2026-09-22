@@ -27,8 +27,7 @@ namespace WPEFramework {
 namespace Plugin {
 
     class ES1Benchmark : public PluginHost::IPlugin
-                       , public PluginHost::JSONRPC
-                       , public Exchange::IES1Benchmark {
+                       , public PluginHost::JSONRPC {
     public:
         ES1Benchmark(const ES1Benchmark&) = delete;
         ES1Benchmark& operator=(const ES1Benchmark&) = delete;
@@ -60,7 +59,7 @@ namespace Plugin {
         BEGIN_INTERFACE_MAP(ES1Benchmark)
             INTERFACE_ENTRY(PluginHost::IPlugin)
             INTERFACE_ENTRY(PluginHost::IDispatcher)
-            INTERFACE_ENTRY(Exchange::IES1Benchmark)
+            INTERFACE_AGGREGATE(Exchange::IES1Benchmark, _implementation)
         END_INTERFACE_MAP
 
         // IPlugin
@@ -68,38 +67,10 @@ namespace Plugin {
         void Deinitialize(PluginHost::IShell* service) override;
         string Information() const override;
 
-        // IES1Benchmark
-        uint32_t SetString(const string& value) override;
-        uint32_t GetString(const uint32_t size, string& value) override;
-
-        uint32_t SetArray(const std::vector<uint8_t>& value) override;
-        uint32_t GetArray(const uint32_t size, std::vector<uint8_t>& value) override;
-
-        uint32_t SetMixedArray(const std::vector<Exchange::IES1Benchmark::MixedElement>& value) override;
-        uint32_t GetMixedArray(const uint32_t count, std::vector<Exchange::IES1Benchmark::MixedElement>& value) override;
-
-        uint32_t SetNestedObjects(const std::vector<Exchange::IES1Benchmark::NestedObject>& value) override;
-        uint32_t GetNestedObjects(const uint32_t count, std::vector<Exchange::IES1Benchmark::NestedObject>& value) override;
-
-        uint32_t SetUint32(const uint32_t value) override;
-        uint32_t GetUint32(uint32_t& value) override;
-
-        uint32_t SetUint64(const uint64_t value) override;
-        uint32_t GetUint64(uint64_t& value) override;
-
-        uint32_t SetBool(const bool value) override;
-        uint32_t GetBool(bool& value) override;
-
-        uint32_t SetFloat(const float value) override;
-        uint32_t GetFloat(float& value) override;
-
-        uint32_t SetDouble(const double value) override;
-        uint32_t GetDouble(double& value) override;
-
-        uint32_t MeasureCopyCost(const uint32_t size, uint64_t& us) override;
-        uint32_t MeasureStringResizeCost(const uint32_t size, uint64_t& us) override;
-        uint32_t MeasureMixedAssignCost(const uint32_t count, uint64_t& us) override;
-        uint32_t MeasureNestedAssignCost(const uint32_t count, uint64_t& us) override;
+    private:
+        PluginHost::IShell* _service { nullptr };
+        uint32_t _connectionId { 0 };
+        Exchange::IES1Benchmark* _implementation { nullptr };
     };
 
 } // namespace Plugin

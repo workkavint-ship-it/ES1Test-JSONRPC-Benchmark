@@ -8,7 +8,8 @@ autostart = "@PLUGIN_ES1BENCHMARK_AUTOSTART@"
 # so this survives the device's IP changing between test runs.
 configuration = {
     "root": {
-        "mode": "@PLUGIN_ES1BENCHMARK_MODE@"
+        "mode": "@PLUGIN_ES1BENCHMARK_MODE@",
+        "locator": "lib@PLUGIN_ES1BENCHMARK_IMPLEMENTATION@.so"
     },
     "notifyhost":  "10.0.0.154",
     "notifyport":  8080,
